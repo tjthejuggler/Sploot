@@ -42,8 +42,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.sploot.ble.SensorStatus
 import com.example.sploot.di.AppContainer
 import com.example.sploot.ml.EngineRegistry
+import com.example.sploot.ui.components.NightCard
+import com.example.sploot.ui.components.SectionTitle
+import android.Manifest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -64,6 +68,46 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
 
     private val _ui = MutableStateFlow(Ui())
     val ui = _ui.asStateFlow()
+
+    // ---- sensor (moved from Home) ----
+    val connectionState = container.polarClient.connectionState
+    val battery = container.polarClient.batteryPercent
+    val lastKnownDevice = container.deviceRepo.lastKnownDeviceId
+    val discovered = container.deviceRepo.discovered
+
+    private val _scanning = MutableStateFlow(false)
+    val scanning = _scanning.asStateFlow()
+
+    private var scanJob: kotlinx.coroutines.Job? = null
+
+    fun btPermissionsGranted(): Boolean = container.polarClient.hasRequiredPermissions()
+
+    fun scan() {
+        if (!container.polarClient.hasRequiredPermissions()) {
+            _ui.value = _ui.value.copy(message = "Bluetooth permissions required")
+            return
+        }
+        _scanning.value = true
+        scanJob = viewModelScope.launch {
+            try {
+                container.deviceRepo.scan().collect { /* discovered StateFlow updates */ }
+            } finally {
+                _scanning.value = false
+            }
+        }
+    }
+
+    fun stopScan() {
+        scanJob?.cancel()
+        _scanning.value = false
+    }
+
+    fun connect(deviceId: String) {
+        viewModelScope.launch {
+            runCatching { container.deviceRepo.connectAndRemember(deviceId) }
+                .onFailure { _ui.value = _ui.value.copy(message = "Connect failed: ${it.message}") }
+        }
+    }
 
     init {
         viewModelScope.launch {
@@ -186,7 +230,7 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
 }
 
 @Composable
-fun SettingsScreen(viewModel: SettingsViewModel) {
+fun SettingsScreen(viewModel: SettingsViewModel, onOpenExport: () -> Unit = {}) {
     val ui by viewModel.ui.collectAsState()
     val context = LocalContext.current
     var pendingEngine by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }
@@ -201,14 +245,26 @@ fun SettingsScreen(viewModel: SettingsViewModel) {
         }
     }
 
+    val btPermissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
+    } else {
+        arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+    }
+    val btLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
+        if (granted.values.all { it }) viewModel.scan() else viewModel.refreshShizuku()
+    }
+
     Column(
         Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
+        Spacer(Modifier.height(4.dp))
         Text("Settings", style = MaterialTheme.typography.headlineMedium)
+
+        SensorCard(viewModel, btLauncher, btPermissions)
 
         Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -255,6 +311,19 @@ fun SettingsScreen(viewModel: SettingsViewModel) {
         }
 
         AutomaticCaptureCard(viewModel)
+
+        // Export (moved from the old bottom-bar tab)
+        NightCard(Modifier.fillMaxWidth()) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SectionTitle("Export")
+                Text(
+                    "Export sessions as CSV or EDF+.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Button(onClick = onOpenExport) { Text("Open export screen") }
+            }
+        }
 
         Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -369,6 +438,72 @@ private fun AutomaticCaptureCard(viewModel: SettingsViewModel) {
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+    }
+}
+
+/** Sensor management (moved from Home): pairing, scan, connect, live status. */
+@Composable
+private fun SensorCard(
+    viewModel: SettingsViewModel,
+    btLauncher: androidx.activity.compose.ManagedActivityResultLauncher<Array<String>, Map<String, Boolean>>,
+    btPermissions: Array<String>,
+) {
+    val conn by viewModel.connectionState.collectAsState()
+    val battery by viewModel.battery.collectAsState()
+    val lastDevice by viewModel.lastKnownDevice.collectAsState()
+    val discovered by viewModel.discovered.collectAsState()
+    val scanning by viewModel.scanning.collectAsState()
+
+    NightCard(Modifier.fillMaxWidth()) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            SectionTitle("Sensor")
+            Text(
+                "Device: ${lastDevice ?: "none paired"}",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                "Connection: ${conn.name.lowercase().replaceFirstChar { it.uppercase() }}",
+                color = when (conn) {
+                    SensorStatus.ConnectionState.CONNECTED -> MaterialTheme.colorScheme.secondary
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
+            Text("Battery: ${battery?.let { "$it%" } ?: "--"}")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = {
+                        if (viewModel.scanning.value) {
+                            viewModel.stopScan()
+                        } else if (viewModel.btPermissionsGranted()) {
+                            viewModel.scan()
+                        } else {
+                            btLauncher.launch(btPermissions)
+                        }
+                    },
+                ) {
+                    Text(if (scanning) "Stop scan" else "Scan for devices")
+                }
+                if (lastDevice != null) {
+                    OutlinedButton(onClick = { viewModel.connect(lastDevice!!) }) { Text("Reconnect") }
+                }
+            }
+            if (discovered.isNotEmpty()) {
+                Text("Discovered", style = MaterialTheme.typography.titleSmall)
+                discovered.forEach { d ->
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                    ) {
+                        Column {
+                            Text(d.name.ifBlank { d.deviceId })
+                            Text("RSSI ${d.rssi}", style = MaterialTheme.typography.labelSmall)
+                        }
+                        Button(onClick = { viewModel.connect(d.deviceId) }) { Text("Pair") }
+                    }
+                }
+            }
         }
     }
 }

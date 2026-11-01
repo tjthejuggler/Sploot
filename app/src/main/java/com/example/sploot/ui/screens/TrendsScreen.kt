@@ -11,9 +11,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -22,7 +19,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import com.example.sploot.R
@@ -32,6 +28,8 @@ import androidx.lifecycle.viewModelScope
 import com.example.sploot.data.db.DailyBaselineEntity
 import com.example.sploot.data.repo.AutonomicBaselines
 import com.example.sploot.di.AppContainer
+import com.example.sploot.ui.components.NightCard
+import com.example.sploot.ui.components.SectionTitle
 import com.example.sploot.ui.components.SimpleLineChart
 import com.example.sploot.ui.components.StatCard
 import com.example.sploot.ui.theme.HrCurve
@@ -41,10 +39,14 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
+/**
+ * Trends: weekly / monthly / 6-month / yearly views of nightly autonomic
+ * aggregates. One chart block per metric, one switcher controlling range.
+ */
 class TrendsViewModel(private val container: AppContainer) : ViewModel() {
 
     data class Ui(
-        val days: Int = 14,
+        val days: Int = 7,
         val rows: List<DailyBaselineEntity> = emptyList(),
         val baselines: AutonomicBaselines? = null,
     )
@@ -53,7 +55,7 @@ class TrendsViewModel(private val container: AppContainer) : ViewModel() {
     val ui = _ui.asStateFlow()
 
     init {
-        load(14)
+        load(7)
     }
 
     fun load(days: Int) {
@@ -74,26 +76,37 @@ class TrendsViewModel(private val container: AppContainer) : ViewModel() {
     }
 }
 
+private data class RangeOption(val label: String, val days: Int)
+
 @Composable
 fun TrendsScreen(viewModel: TrendsViewModel) {
     val ui by viewModel.ui.collectAsState()
 
+    val ranges = listOf(
+        RangeOption("week", 7),
+        RangeOption("month", 30),
+        RangeOption("6 months", 182),
+        RangeOption("year", 365),
+    )
+
     LazyColumn(
         Modifier
             .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         item {
-            Text("Autonomic trends", style = MaterialTheme.typography.headlineMedium)
+            Text("Trends", style = MaterialTheme.typography.headlineMedium)
         }
+
+        // single range switcher for all charts
         item {
-            androidx.compose.foundation.layout.Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(14, 60).forEach { d ->
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ranges.forEach { r ->
                     FilterChip(
-                        selected = ui.days == d,
-                        onClick = { viewModel.load(d) },
-                        label = { Text("$d days") },
+                        selected = ui.days == r.days,
+                        onClick = { viewModel.load(r.days) },
+                        label = { Text(r.label) },
                     )
                 }
             }
@@ -121,37 +134,57 @@ fun TrendsScreen(viewModel: TrendsViewModel) {
             }
         }
 
+        // Average nightly heart rate — one chart, switchable ranges
         item {
-            ChartCard(
-                title = "Nocturnal rMSSD (ms)",
-                points = ui.rows.mapIndexed { i, r ->
-                    (i.toFloat() / ui.rows.size.coerceAtLeast(1)) to r.nocturnalRmssd
-                },
-                band = ui.baselines?.let {
-                    (it.rmssd.median - it.rmssd.iqr / 2)..(it.rmssd.median + it.rmssd.iqr / 2)
-                },
-                color = RmssdCurve,
-                footer = ui.baselines?.let {
-                    "baseline median %.0f ms · IQR %.0f (n=${it.rmssd.nDays})"
-                        .format(it.rmssd.median, it.rmssd.iqr)
-                },
-            )
+            NightCard(Modifier.fillMaxWidth()) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SectionTitle("Average nightly HR")
+                    SimpleLineChart(
+                        points = ui.rows.mapIndexed { i, r ->
+                            i.toFloat() / ui.rows.size.coerceAtLeast(1) to r.nocturnalRhrMin.toFloat()
+                        },
+                        lineColor = HrCurve,
+                        band = ui.baselines?.let {
+                            (it.rhr.median - it.rhr.iqr / 2)..(it.rhr.median + it.rhr.iqr / 2)
+                        },
+                        minMaxLabel = { "%.0f".format(it) },
+                    )
+                    Text(
+                        ui.baselines?.let {
+                            "baseline median %.0f bpm · IQR %.0f (n=${it.rhr.nDays})"
+                                .format(it.rhr.median, it.rhr.iqr)
+                        } ?: "${ui.rows.size} nights",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         }
+
         item {
-            ChartCard(
-                title = "Nocturnal RHR (bpm)",
-                points = ui.rows.mapIndexed { i, r ->
-                    (i.toFloat() / ui.rows.size.coerceAtLeast(1)) to r.nocturnalRhrMin
-                },
-                band = ui.baselines?.let {
-                    (it.rhr.median - it.rhr.iqr / 2)..(it.rhr.median + it.rhr.iqr / 2)
-                },
-                color = HrCurve,
-                footer = ui.baselines?.let {
-                    "baseline median %.0f bpm · IQR %.0f (n=${it.rhr.nDays})"
-                        .format(it.rhr.median, it.rhr.iqr)
-                },
-            )
+            NightCard(Modifier.fillMaxWidth()) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SectionTitle("Nocturnal rMSSD")
+                    SimpleLineChart(
+                        points = ui.rows.mapIndexed { i, r ->
+                            i.toFloat() / ui.rows.size.coerceAtLeast(1) to r.nocturnalRmssd.toFloat()
+                        },
+                        lineColor = RmssdCurve,
+                        band = ui.baselines?.let {
+                            (it.rmssd.median - it.rmssd.iqr / 2)..(it.rmssd.median + it.rmssd.iqr / 2)
+                        },
+                        minMaxLabel = { "%.0f".format(it) },
+                    )
+                    Text(
+                        ui.baselines?.let {
+                            "baseline median %.0f ms · IQR %.0f (n=${it.rmssd.nDays})"
+                                .format(it.rmssd.median, it.rmssd.iqr)
+                        } ?: "${ui.rows.size} nights",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         }
 
         item {
@@ -170,32 +203,5 @@ fun TrendsScreen(viewModel: TrendsViewModel) {
             }
         }
         item { Spacer(Modifier.height(48.dp)) }
-    }
-}
-
-@Composable
-private fun ChartCard(
-    title: String,
-    points: List<Pair<Float, Double>>,
-    band: ClosedFloatingPointRange<Double>?,
-    color: androidx.compose.ui.graphics.Color,
-    footer: String?,
-) {
-    Card(
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-    ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
-            SimpleLineChart(
-                points.map { it.first to it.second.toFloat() },
-                lineColor = color,
-                band = band,
-                minMaxLabel = { "%.0f".format(it) },
-            )
-            footer?.let {
-                Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
     }
 }

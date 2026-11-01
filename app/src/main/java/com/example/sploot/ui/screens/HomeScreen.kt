@@ -323,78 +323,30 @@ fun HomeScreen(
             }
         }
 
-        item {
-            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Sensor", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "Device: ${lastDevice ?: "none paired"}",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    Text(
-                        "Connection: ${conn.name.lowercase().replaceFirstChar { it.uppercase() }}",
-                        color = when (conn) {
-                            SensorStatus.ConnectionState.CONNECTED -> MaterialTheme.colorScheme.secondary
-                            else -> MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                    )
-                    Text("Battery: ${battery?.let { "$it%" } ?: "--"}")
-                    Text("HR: ${hr?.let { "$it bpm" } ?: "--"} · packets: $packets")
-                    if (statusMsg != null) {
-                        Text(statusMsg!!, color = MaterialTheme.colorScheme.error)
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(
-                            onClick = {
-                                if (viewModel.scanning.value) {
-                                    viewModel.stopScan()
-                                } else if (viewModel.btPermissionsGranted()) {
-                                    viewModel.scan()
-                                } else {
-                                    btLauncher.launch(btPermissions)
-                                }
-                            },
-                        ) {
-                            Text(if (scanning) "Stop scan" else "Scan for devices")
-                        }
-                        if (lastDevice != null && !recording.active) {
-                            OutlinedButton(onClick = { viewModel.connect(lastDevice!!) }) { Text("Reconnect") }
-                        }
-                    }
-                }
-            }
-        }
-
-        if (discovered.isNotEmpty()) {
-            item { Text("Discovered", style = MaterialTheme.typography.titleSmall) }
-            items(discovered, key = { it.deviceId }) { d: DiscoveredDevice ->
-                Card(Modifier.fillMaxWidth()) {
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column {
-                            Text(d.name.ifBlank { d.deviceId })
-                            Text("RSSI ${d.rssi}", style = MaterialTheme.typography.labelSmall)
-                        }
-                        Button(onClick = { viewModel.connect(d.deviceId) }) { Text("Pair") }
-                    }
-                }
-            }
-        }
-
+        // compact sensor status line (full scan/pair lives in Settings)
         item {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Recording", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Device: ${lastDevice ?: "none paired"} · " +
+                            "${conn.name.lowercase()}${battery?.let { " · $it%" } ?: ""}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (hr != null) {
+                        Text(
+                            "HR: ${hr} bpm · packets: $packets",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (statusMsg != null) {
+                        Text(statusMsg!!, color = MaterialTheme.colorScheme.error)
+                    }
                     if (recording.active) {
                         Text("Session ${recording.sessionId} running", color = MaterialTheme.colorScheme.secondary)
                         CircularProgressIndicator(Modifier.height(20.dp))
-                    } else {
-                        Text("Idle")
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (!recording.active) {

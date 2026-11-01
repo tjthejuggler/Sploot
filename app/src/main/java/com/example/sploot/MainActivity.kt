@@ -13,8 +13,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ShowChart
 import androidx.compose.material.icons.rounded.Assessment
+import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.Home
-import androidx.compose.material.icons.rounded.Output
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -42,6 +42,8 @@ import com.example.sploot.ui.screens.ABCompareScreen
 import com.example.sploot.ui.screens.ABCompareViewModel
 import com.example.sploot.ui.screens.DashboardScreen
 import com.example.sploot.ui.screens.DashboardViewModel
+import com.example.sploot.ui.screens.DiaryScreen
+import com.example.sploot.ui.screens.DiaryViewModel
 import com.example.sploot.ui.screens.ExportScreen
 import com.example.sploot.ui.screens.ExportViewModel
 import com.example.sploot.ui.screens.HomeScreen
@@ -50,6 +52,8 @@ import com.example.sploot.ui.screens.ProcessingViewModel
 import com.example.sploot.ui.screens.RecordViewModel
 import com.example.sploot.ui.screens.SettingsScreen
 import com.example.sploot.ui.screens.SettingsViewModel
+import com.example.sploot.ui.screens.NightDetailScreen
+import com.example.sploot.ui.screens.NightDetailViewModel
 import com.example.sploot.ui.screens.TrendsScreen
 import com.example.sploot.ui.screens.TrendsViewModel
 import com.example.sploot.ui.theme.SplootTheme
@@ -68,14 +72,14 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private data class TopDestination(val route: String, val label: String, val icon: ImageVector)
+private data class TopDestination(val route: String, val label: String, val iconRes: Int)
 
 private val destinations = listOf(
-    TopDestination("home", "Record", Icons.Rounded.Home),
-    TopDestination("dashboard", "Report", Icons.Rounded.Assessment),
-    TopDestination("trends", "Trends", Icons.AutoMirrored.Rounded.ShowChart),
-    TopDestination("export", "Export", Icons.Rounded.Output),
-    TopDestination("settings", "Settings", Icons.Rounded.Settings),
+    TopDestination("home", "record", com.example.sploot.R.drawable.ic_nav_record),
+    TopDestination("diary", "diary", com.example.sploot.R.drawable.ic_nav_diary),
+    TopDestination("dashboard", "report", com.example.sploot.R.drawable.ic_nav_report),
+    TopDestination("trends", "trends", com.example.sploot.R.drawable.ic_nav_trends),
+    TopDestination("settings", "settings", com.example.sploot.R.drawable.ic_nav_settings),
 )
 
 @Composable
@@ -107,11 +111,14 @@ fun SplootApp(container: AppContainer) {
                             },
                             icon = {
                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Icon(
-                                        d.icon,
+                                    androidx.compose.foundation.Image(
+                                        painter = androidx.compose.ui.res.painterResource(d.iconRes),
                                         contentDescription = d.label,
-                                        tint = if (selected) MaterialTheme.colorScheme.onSurface
-                                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(
+                                            if (selected) MaterialTheme.colorScheme.onSurface
+                                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        ),
+                                        modifier = Modifier.size(26.dp),
                                     )
                                     // soft glow dot: the only active indication
                                     Box(
@@ -126,12 +133,7 @@ fun SplootApp(container: AppContainer) {
                                     )
                                 }
                             },
-                            label = {
-                                Text(
-                                    d.label.lowercase(),
-                                    style = MaterialTheme.typography.labelSmall,
-                                )
-                            },
+                            label = null,
                             colors = NavigationBarItemDefaults.colors(
                                 indicatorColor = Color.Transparent,
                                 selectedIconColor = MaterialTheme.colorScheme.onSurface,
@@ -157,6 +159,23 @@ fun SplootApp(container: AppContainer) {
                     onProcessRecorded = { sid -> nav.navigate("processing/$sid") },
                     onProcessSnoop = { sid, uri -> nav.navigate("processing/$sid?snoopUri=$uri") },
                 )
+            }
+
+            composable("diary") {
+                val vm: DiaryViewModel = viewModel(factory = DiaryViewModel.factory(container))
+                DiaryScreen(
+                    viewModel = vm,
+                    onOpenNight = { sid -> nav.navigate("night/$sid") },
+                )
+            }
+
+            composable(
+                route = "night/{sessionId}",
+                arguments = listOf(androidx.navigation.navArgument("sessionId") { }),
+            ) { entry ->
+                val sid = entry.arguments?.getString("sessionId") ?: return@composable
+                val vm: NightDetailViewModel = viewModel(factory = NightDetailViewModel.factory(container))
+                NightDetailScreen(viewModel = vm, sessionId = sid)
             }
 
             composable(
@@ -224,7 +243,7 @@ fun SplootApp(container: AppContainer) {
 
             composable("settings") {
                 val vm: SettingsViewModel = viewModel(factory = SettingsViewModel.factory(container))
-                SettingsScreen(vm)
+                SettingsScreen(vm, onOpenExport = { nav.navigate("export") })
             }
         }
     }
