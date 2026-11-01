@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Minimal single eucalypt sprig, hand-authored line art. Used quietly in
+     empty states (tinted, low emphasis). Phase-13 art direction: the koala's
+     world, not koalas. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="96dp"
+    android:height="96dp"
+    android:viewportWidth="96"
+    android:viewportHeight="96">
+    <!-- curved stem -->
+    <path
+        android:pathData="M30,88 C38,64 52,44 70,26"
+        android:strokeColor="#8F8A9E"
+        android:strokeWidth="2.2"
+        android:strokeLineCap="round" />
+    <!-- round eucalypt leaves, alternating sides: filled soft sage -->
+    <path
+        android:fillColor="#B5CBB3"
+        android:fillAlpha="0.9"
+        android:pathData="M34,70 a10,8 38 1 0 15,-9 a10,8 38 1 0 -15,9 Z" />
+    <path
+        android:fillColor="#B5CBB3"
+        android:fillAlpha="0.8"
+        android:pathData="M43,55 a10,8 218 1 0 -16,8 a10,8 218 1 0 16,-8 Z" />
+    <path
+        android:fillColor="#B5CBB3"
+        android:fillAlpha="0.85"
+        android:pathData="M50,42 a9,7 32 1 0 14,-9 a9,7 32 1 0 -14,9 Z" />
+    <path
+        android:fillColor="#B5CBB3"
+        android:fillAlpha="0.75"
+        android:pathData="M58,30 a9,7 212 1 0 -14,7 a9,7 212 1 0 14,-7 Z" />
+    <!-- tip leaf -->
+    <path
+        android:fillColor="#B5CBB3"
+        android:fillAlpha="0.9"
+        android:pathData="M70,26 a8,6 40 1 0 12,-8 a8,6 40 1 0 -12,8 Z" />
+    <!-- a tiny distant seed dot drifting off the stem -->
+    <path
+        android:fillColor="#C1B7D8"
+        android:pathData="M76,52 m-2.4,0 a2.4,2.4 0 1 0 4.8,0 a2.4,2.4 0 1 0 -4.8,0" />
+    <path
+        android:fillColor="#C1B7D8"
+        android:pathData="M22,38 m-1.8,0 a1.8,1.8 0 1 0 3.6,0 a1.8,1.8 0 1 0 -3.6,0" />
+</vector>

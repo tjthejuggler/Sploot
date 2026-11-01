@@ -1,0 +1,26 @@
+# Sploot ml_pipeline — Python 3.10+ recommended.
+# Core numerics
+numpy>=1.24,<3
+pandas>=2.0
+scipy>=1.10
+pyarrow>=14          # parquet shards
+
+# ONNX toolchain
+onnx>=1.14,<1.18
+onnxruntime>=1.16
+onnxmltools>=1.11    # LightGBM -> ONNX (pinned pairing with lightgbm 4.x)
+onnxconverter-common>=1.13
+
+# Training
+torch>=2.1
+lightgbm>=4.0,<5
+scikit-learn>=1.3
+
+# NSRR / PSG data
+pyedflib>=0.1.30     # EDF+ reader (SHHS/MESA polysomnography)
+wfdb>=4.1            # WFDB annotation/record utilities where applicable
+h5py>=3.8
+sqlalchemy>=2.0      # optional NSRR metadata db access
+
+# torch CPU wheels are installed via setup.sh
+# (pip install torch --index-url https://download.pytorch.org/whl/cpu)

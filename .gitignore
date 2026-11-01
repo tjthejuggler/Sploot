@@ -1,0 +1,23 @@
+*.iml
+.gradle
+/local.properties
+.idea/
+.kotlin/
+.codebase-memory/
+.DS_Store
+/build
+/app/build
+/captures
+.externalNativeBuild
+.cxx
+
+# Python ML pipeline
+ml_pipeline/.venv/
+ml_pipeline/venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# build artifacts anywhere
+build/

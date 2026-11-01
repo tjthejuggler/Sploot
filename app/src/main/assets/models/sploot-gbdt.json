@@ -1,0 +1,18 @@
+{
+  "engineId": "sploot-gbdt",
+  "featureVersion": 1,
+  "logits": false,
+  "inputName": "features",
+  "outputName": "probs",
+  "inputShape": [
+    1,
+    127
+  ],
+  "outputClasses": [
+    "wake",
+    "light",
+    "deep",
+    "rem"
+  ],
+  "placeholder": true
+}

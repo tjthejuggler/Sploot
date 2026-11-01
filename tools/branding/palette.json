@@ -1,0 +1,143 @@
+{
+  "source": "tools/branding/sploot_icon_art_0.png",
+  "swatches": [
+    {
+      "hex": "#b8b2d6",
+      "share": 0.102
+    },
+    {
+      "hex": "#afadd1",
+      "share": 0.098
+    },
+    {
+      "hex": "#d9c8e1",
+      "share": 0.086
+    },
+    {
+      "hex": "#c5bad9",
+      "share": 0.074
+    },
+    {
+      "hex": "#b7b2c6",
+      "share": 0.069
+    },
+    {
+      "hex": "#bbb4d7",
+      "share": 0.065
+    },
+    {
+      "hex": "#cdbfdd",
+      "share": 0.053
+    },
+    {
+      "hex": "#c9bdda",
+      "share": 0.049
+    },
+    {
+      "hex": "#d3c3de",
+      "share": 0.045
+    },
+    {
+      "hex": "#d5c5e0",
+      "share": 0.044
+    },
+    {
+      "hex": "#cfc0dd",
+      "share": 0.043
+    },
+    {
+      "hex": "#c1bacf",
+      "share": 0.042
+    },
+    {
+      "hex": "#c1b6d5",
+      "share": 0.042
+    },
+    {
+      "hex": "#928c98",
+      "share": 0.038
+    },
+    {
+      "hex": "#a8a7c8",
+      "share": 0.037
+    },
+    {
+      "hex": "#d5cdd4",
+      "share": 0.035
+    },
+    {
+      "hex": "#d8c7e0",
+      "share": 0.022
+    },
+    {
+      "hex": "#cfc3d6",
+      "share": 0.016
+    },
+    {
+      "hex": "#b2b1d0",
+      "share": 0.015
+    },
+    {
+      "hex": "#aaaccb",
+      "share": 0.014
+    },
+    {
+      "hex": "#c6bdd4",
+      "share": 0.006
+    },
+    {
+      "hex": "#bbb4cc",
+      "share": 0.005
+    },
+    {
+      "hex": "#beb6d3",
+      "share": 0.001
+    },
+    {
+      "hex": "#b5aecc",
+      "share": 0.0
+    }
+  ],
+  "colors": {
+    "nightMist": {
+      "hex": "#c1b7d8",
+      "fromSwatch": "edge-median",
+      "role": "background"
+    },
+    "moonSurface": {
+      "hex": "#b8b2d6",
+      "fromSwatch": "#b8b2d6",
+      "role": "surface"
+    },
+    "eucalypt": {
+      "hex": "#b5cbb3",
+      "fromSwatch": "#b5cbb3",
+      "role": "primary"
+    },
+    "koalaFur": {
+      "hex": "#928c98",
+      "fromSwatch": "#928c98",
+      "role": "secondary"
+    },
+    "dawnRose": {
+      "hex": "#d2bcbf",
+      "fromSwatch": "#d2bcbf",
+      "role": "accent"
+    },
+    "starlight": {
+      "hex": "#c5bad9",
+      "fromSwatch": "#c5bad9",
+      "role": "supporting-light"
+    },
+    "textOnDark": {
+      "hex": "#423b49",
+      "fromSwatch": "#928c98 (deepened)",
+      "role": "text"
+    },
+    "outlineMuted": {
+      "hex": "#b7b2c6",
+      "fromSwatch": "#b7b2c6",
+      "role": "supporting-outline"
+    }
+  }
+}
