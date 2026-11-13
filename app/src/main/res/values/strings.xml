@@ -3,4 +3,8 @@
     <string name="recording_channel_name">Overnight recording</string>
     <string name="recording_channel_desc">Shows live sensor status while a sleep recording is running.</string>
     <string name="recording_notification_title">Sploot recording</string>
+    <string name="morning_download_channel_name">Morning download</string>
+    <string name="morning_download_channel_desc">Progress of the previous night\'s download from the sensor</string>
+    <string name="morning_download_progress_title">Downloading last night…</string>
+    <string name="morning_download_done_title">Last night\'s sleep</string>
 </resources>

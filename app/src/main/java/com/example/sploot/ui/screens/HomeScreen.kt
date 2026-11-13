@@ -147,9 +147,9 @@ class RecordViewModel(private val container: AppContainer) : ViewModel() {
      * entry point.
      */
     fun captureLastNight() {
-        container.appScope.launch {
-            runCatching { container.morningCapture.captureNow() }
-        }
+        // Foreground service: the download survives leaving the app and shows
+        // a progress notification (→ completion notification when done).
+        com.example.sploot.ble.snoop.MorningDownloadService.start(container.context)
     }
 
     /** Session id just stopped, for the caller to route into processing. */

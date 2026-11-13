@@ -46,6 +46,10 @@
             android:name=".recording.RecordingForegroundService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
+        <service
+            android:name=".ble.snoop.MorningDownloadService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
 
         <!-- Shizuku provider (required by dev.rikka.shizuku:api for binder access) -->
         <provider

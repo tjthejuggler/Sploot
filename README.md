@@ -195,3 +195,17 @@ Taste-level pass. The koala retreats; its world steps forward.
   skipped while a recording is active). The old duplicate "Capture last night"
   button, always-visible "Import btsnoop log" button and separate auto-capture
   status card are gone (btsnoop import remains as a failure-path fallback).
+
+## 2026-11-13 (b) — Background morning download with progress notification
+- New `MorningDownloadService` (`connectedDevice` foreground service): the
+  previous-night download from the sensor now runs in the foreground service
+  with a partial wakelock, so leaving the app does not interrupt it. It shows
+  a live progress notification ("Downloading last night… — <step>") and, on
+  completion, either clears it in favor of the existing "Good morning" summary
+  notification (night processed) or posts its own final notice
+  ("✓ no new nights…" / failure reason).
+- Home's auto-download-on-connect and "Try again" now start this service
+  instead of an app-scope coroutine.
+- Concurrent capture triggers (app-open auto capture, connect trigger,
+  service, manual retry) are serialized with the coordinator mutex;
+  overlapping callers no-op with a clear status instead of double-pulling.

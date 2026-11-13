@@ -79,6 +79,17 @@ class MorningCaptureCoordinator(
      * the cached capture is reprocessed directly — no privileged shell needed.
      */
     suspend fun maybeAutoCapture() {
+        // Serialize with any other capture in flight (Home connect trigger,
+        // MorningDownloadService, manual retry).
+        if (!mutex.tryLock()) return
+        try {
+            maybeAutoCaptureLocked()
+        } finally {
+            mutex.unlock()
+        }
+    }
+
+    private suspend fun maybeAutoCaptureLocked() {
         // 1. Primary: pull the night straight from the sensor's internal
         //    memory (offline recordings). Survives log rotation, cache
         //    overwrites and Shizuku being down — the sensor IS the recorder.
@@ -98,7 +109,7 @@ class MorningCaptureCoordinator(
             )
             return
         }
-        runCapture()
+        runCaptureLocked()
     }
 
     /**
@@ -248,8 +259,18 @@ class MorningCaptureCoordinator(
      * new (or could not be reached).
      */
     suspend fun captureNow(): CaptureResult {
-        if (pullSensorRecordings()) return CaptureResult.Captured(null, null)
-        return runCapture()
+        // Serialize concurrent triggers (app-open auto capture + the Home
+        // connect trigger + a manual retry can race); second caller no-ops.
+        if (!mutex.tryLock()) {
+            _status.value = Status.Failed("A download is already in progress")
+            return CaptureResult.Failed("a download is already in progress")
+        }
+        try {
+            if (pullSensorRecordings()) return CaptureResult.Captured(null, null)
+            return runCaptureLocked()
+        } finally {
+            mutex.unlock()
+        }
     }
 
     /**
@@ -257,7 +278,8 @@ class MorningCaptureCoordinator(
      * is stale (older ingest version) — the "decoding fix landed, re-run the
      * same log" path. Returns true when the cached capture was consumed.
      */
-    private suspend fun processCachedCapture(sourceLabel: String): Boolean = mutex.withLock {
+    // Caller must already hold [mutex].
+    private suspend fun processCachedCapture(sourceLabel: String): Boolean {
         val cache = fetcher.cacheFile
         if (!cache.isFile || cache.length() < 16L) return false
         val stored = store.lastFingerprint.first()
@@ -332,7 +354,8 @@ class MorningCaptureCoordinator(
         return state
     }
 
-    private suspend fun runCapture(): CaptureResult = mutex.withLock {
+    // Caller must already hold [mutex].
+    private suspend fun runCaptureLocked(): CaptureResult {
         val previous = store.effectiveFingerprint()
         val prevSize = store.currentSize()
 
