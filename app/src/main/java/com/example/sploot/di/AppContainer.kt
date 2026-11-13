@@ -9,6 +9,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.example.sploot.ble.PolarBleClient
 import com.example.sploot.ble.PolarDeviceRepository
 import com.example.sploot.ble.snoop.MorningCaptureCoordinator
+import com.example.sploot.ble.snoop.PolarOfflineRecordingPuller
 import com.example.sploot.ble.snoop.ShizukuShellRunner
 import com.example.sploot.ble.snoop.SnoopAutoFetcher
 import com.example.sploot.ble.snoop.SnoopCaptureStore
@@ -54,10 +55,22 @@ class AppContainer(val context: Context) {
 
     val settingsStore = SettingsStore(context)
 
-    /** Builds the currently-selected engine (fresh model load each night). */
+    /**
+     * Builds the currently-selected engine (fresh model load each night).
+     * Falls back to the heuristic engine when the selected id has no loadable
+     * model (the bundled ONNX files are placeholders; the heuristic engine is
+     * the default and needs no model file).
+     */
     fun engine(): SleepStagingEngine {
         val id = settingsStore.cachedEngineId
-        return EngineRegistry.create(id, modelLoader.load(id))
+        if (id == EngineRegistry.HEURISTIC) {
+            return EngineRegistry.create(EngineRegistry.HEURISTIC, null)
+        }
+        return try {
+            EngineRegistry.create(id, modelLoader.load(id))
+        } catch (e: Exception) {
+            EngineRegistry.create(EngineRegistry.HEURISTIC, null)
+        }
     }
 
     fun modelInstaller() = modelLoader
@@ -82,6 +95,9 @@ class AppContainer(val context: Context) {
         store = snoopCaptureStore,
         processNight = processNight,
         recoveryRepo = recoveryRepo,
+        repo = sessionRepo,
+        deviceRepo = deviceRepo,
+        puller = PolarOfflineRecordingPuller(polarClient),
     )
 
     val exportManager = ExportManager(context, sessionRepo)
@@ -95,10 +111,12 @@ class SettingsStore(private val context: Context) {
     private val key = stringPreferencesKey("staging_engine")
 
     val engineId: Flow<String> = context.settingsPrefs.data.map {
-        it[key] ?: EngineRegistry.SEQ
+        // Default to the heuristic engine until trained ONNX models ship
+        // (the bundled sploot-seq/gbdt files are placeholders).
+        it[key] ?: EngineRegistry.HEURISTIC
     }
 
-    @Volatile var cachedEngineId: String = EngineRegistry.SEQ
+    @Volatile var cachedEngineId: String = EngineRegistry.HEURISTIC
         private set
 
     suspend fun warmCache() {

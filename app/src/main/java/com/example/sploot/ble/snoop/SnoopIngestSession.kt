@@ -30,6 +30,10 @@ class SnoopIngestSession(private val openStream: () -> InputStream) {
         val unknownFrames: Int = 0,
         val unknownHandles: Map<Int, UUIDCount>,
         val batteryPercent: Int? = null,
+        /** IBIs recovered from a Polar offline-recording file transfer (.REC). */
+        val offlineRecordingIbi: Int = 0,
+        /** True when a `.REC` transfer was seen in the capture. */
+        val offlineRecordingSeen: Boolean = false,
     )
 
     /** handle + occurrence count for notifications whose UUID never got resolved. */
@@ -42,6 +46,7 @@ class SnoopIngestSession(private val openStream: () -> InputStream) {
      */
     fun run(onSample: (RawSample) -> Unit): Summary {
         val pmd = PmdFrameDecoder()
+        val offline = PolarOfflineRecordingDecoder(onSample)
         val batteryTracker = BatteryTracker()
         val unknownHandles = HashMap<Int, Int>()
 
@@ -49,6 +54,10 @@ class SnoopIngestSession(private val openStream: () -> InputStream) {
         val att = AttGattDecoder { ntf ->
             val uuid = attRef?.handleToUuid?.get(ntf.attrHandle)
             if (uuid == null) {
+                // Unresolved handle: may still be a Polar offline-recording
+                // transfer captured mid-flight (the reading app skipped service
+                // discovery), so let the content-based decoder try.
+                offline.onNotification(ntf.attrHandle, ntf.timestampMs, ntf.value)
                 unknownHandles.merge(ntf.attrHandle, 1, Int::plus)
             } else if (uuid == PmdFrameDecoder.UUID_BATTERY && ntf.value.isNotEmpty()) {
                 batteryTracker.percent = ntf.value[0].toInt() and 0xFF
@@ -58,7 +67,16 @@ class SnoopIngestSession(private val openStream: () -> InputStream) {
         }
         attRef = att
 
-        val acl = HciAclDemux { pdu -> att.feed(pdu) }
+        val acl = HciAclDemux { pdu ->
+            // Arm the offline-recording decoder from ATT writes naming a .REC path.
+            if (pdu.cid == AttGattDecoder.ATT_CID && pdu.payload.size > 3) {
+                val op = pdu.payload[0].toInt() and 0xFF
+                if (op == 0x12 || op == 0x52) { // WRITE_REQ / WRITE_CMD
+                    offline.onWrite(pdu.payload.copyOfRange(3, pdu.payload.size))
+                }
+            }
+            att.feed(pdu)
+        }
 
         val counters = BtsnoopParser().parse(openStream()) { record ->
             acl.feed(record.h4Packet, record.timestampMs)
@@ -76,6 +94,8 @@ class SnoopIngestSession(private val openStream: () -> InputStream) {
             unknownFrames = pmd.unknownFrames,
             unknownHandles = unknownHandles.map { UUIDCount(it.key, it.value) }.associateBy { it.handle },
             batteryPercent = batteryTracker.percent,
+            offlineRecordingIbi = offline.ibiEmitted,
+            offlineRecordingSeen = offline.armed,
         )
     }
 

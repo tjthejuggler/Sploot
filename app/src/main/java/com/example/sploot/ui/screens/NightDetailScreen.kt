@@ -80,7 +80,7 @@ class NightDetailViewModel(private val container: AppContainer) : ViewModel() {
             val start = session.startEpochMs
             val hrByEpoch = DoubleArray(stageRows.size.coerceAtLeast(1))
             val cnt = IntArray(stageRows.size.coerceAtLeast(1))
-            val ibis = intervals.map { IbiPoint(it.timestampMs, it.intervalMs) }.sortedBy { it.timestampMs }
+            val ibis = cleanForCharts(intervals).sortedBy { it.timestampMs }
             ibis.forEach {
                 val idx = ((it.timestampMs - start) / epochMs).toInt()
                 if (idx in hrByEpoch.indices) {
@@ -107,6 +107,33 @@ class NightDetailViewModel(private val container: AppContainer) : ViewModel() {
                 lowestHr = hrPoints.minByOrNull { it.second }?.second?.toDouble(),
             )
         }
+    }
+
+    /**
+     * Chart-grade cleaning of the persisted raw intervals: the DB keeps every
+     * sample (flagged included) for forensics/export, but plotting them raw is
+     * what produced the HR/HRV spikes Sleep2 doesn't show. Mirrors
+     * [com.example.sploot.signal.ArtifactFilter]: flag rejection (blocker bit,
+     * skin contact, large PPI error estimate), physiological bounds, and a
+     * Kubios-style 20% deviation vs the local 5-beat moving median.
+     */
+    private fun cleanForCharts(rows: List<com.example.sploot.data.db.RawIntervalEntity>): List<IbiPoint> {
+        val sorted = rows.sortedBy { it.timestampMs }
+        val pass1 = sorted.filter {
+            it.blockerBit != true &&
+                it.skinContact != false &&
+                (it.error == null || it.error <= 100) &&
+                it.intervalMs in 300..2000
+        }
+        val vals = pass1.map { it.intervalMs.toDouble() }
+        val keep = BooleanArray(pass1.size) { true }
+        for (i in pass1.indices) {
+            val w = ((i - 2).coerceAtLeast(0)..(i + 2).coerceAtMost(pass1.size - 1))
+                .map { vals[it] }.sorted()
+            val med = if (w.size % 2 == 1) w[w.size / 2] else (w[w.size / 2 - 1] + w[w.size / 2]) / 2
+            if (med > 0 && kotlin.math.abs(vals[i] - med) > 0.20 * med) keep[i] = false
+        }
+        return pass1.filterIndexed { i, r -> keep[i] }.map { IbiPoint(it.timestampMs, it.intervalMs) }
     }
 
     private fun rollingRmssd(ibis: List<IbiPoint>, startMs: Long, totalMs: Long): List<Pair<Float, Float>> {
@@ -237,10 +264,15 @@ fun NightDetailScreen(viewModel: NightDetailViewModel, sessionId: String) {
                 NightCard(Modifier.fillMaxWidth()) {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         SectionTitle("Heart rate")
-                        Text(
-                            "Average heart rate:  ${ui.avgHr?.toInt() ?: "--"} bpm",
-                            style = MaterialTheme.typography.bodyLarge,
-                        )
+                        // Prefer interval-derived stats from the summary (exact,
+                        // interval-weighted); fall back to the plotted curve.
+                        val s = ui.summary
+                        val avg = s?.avgHrBpm ?: ui.avgHr
+                        val minHr = s?.minHrBpm ?: ui.hrPoints.minByOrNull { it.second }?.second?.toDouble()
+                        val maxHr = s?.maxHrBpm ?: ui.hrPoints.maxByOrNull { it.second }?.second?.toDouble()
+                        MetricRow("Average", "${avg?.toInt() ?: "--"} bpm")
+                        MetricRow("Lowest", "${minHr?.toInt() ?: "--"} bpm")
+                        MetricRow("Highest", "${maxHr?.toInt() ?: "--"} bpm")
                         SimpleLineChart(
                             ui.hrPoints,
                             lineColor = HrCurve,
@@ -281,7 +313,9 @@ fun NightDetailScreen(viewModel: NightDetailViewModel, sessionId: String) {
                         MetricRow("Asleep", fmtDur(s.tstMin))
                         MetricRow("Fell asleep in", fmtDur(s.solMin))
                         MetricRow("Awake during", "${fmtDur(s.wasoMin)} · ${s.wasoEpisodes}×")
-                        s.meanRmssdMs?.let { MetricRow("rMSSD", "$it ms") }
+                        s.meanRmssdMs?.let { MetricRow("rMSSD (avg)", "$it ms") }
+                        s.avgSdnnMs?.let { MetricRow("SDNN (avg)", "$it ms") }
+                        s.lowestRhrBpm?.let { MetricRow("Resting HR (lowest 5-min)", "$it bpm") }
                     }
                 }
             }

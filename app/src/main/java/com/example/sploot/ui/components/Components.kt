@@ -424,12 +424,17 @@ fun StageProportionBar(
                 remMin to stageColor(SleepStages.REM),
                 wakeMin to stageColor(SleepStages.WAKE),
             ).forEach { (min, c) ->
-                Box(
-                    Modifier
-                        .weight(((min / total).toFloat()).coerceAtLeast(0f))
-                        .fillMaxHeight()
-                        .background(c),
-                )
+                // Skip zero-duration stages: Compose weight must be > 0
+                // (crash on PPI-only nights where deep/REM/wake are 0).
+                val fraction = (min / total).toFloat()
+                if (fraction > 0f) {
+                    Box(
+                        Modifier
+                            .weight(fraction)
+                            .fillMaxHeight()
+                            .background(c),
+                    )
+                }
             }
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {

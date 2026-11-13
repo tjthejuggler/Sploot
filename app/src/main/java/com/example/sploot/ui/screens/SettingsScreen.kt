@@ -102,9 +102,9 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
         _scanning.value = false
     }
 
-    fun connect(deviceId: String) {
+    fun connect(deviceId: String, name: String? = null) {
         viewModelScope.launch {
-            runCatching { container.deviceRepo.connectAndRemember(deviceId) }
+            runCatching { container.deviceRepo.connectAndRemember(deviceId, name) }
                 .onFailure { _ui.value = _ui.value.copy(message = "Connect failed: ${it.message}") }
         }
     }
@@ -500,7 +500,7 @@ private fun SensorCard(
                             Text(d.name.ifBlank { d.deviceId })
                             Text("RSSI ${d.rssi}", style = MaterialTheme.typography.labelSmall)
                         }
-                        Button(onClick = { viewModel.connect(d.deviceId) }) { Text("Pair") }
+                        Button(onClick = { viewModel.connect(d.deviceId, d.name) }) { Text("Pair") }
                     }
                 }
             }

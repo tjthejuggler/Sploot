@@ -137,7 +137,10 @@ class FullNightPipelineTest {
         val loader = ModelLoader.forDirectory(assetsModelsDir())
 
         for (engineId in EngineRegistry.ALL) {
-            val engine = EngineRegistry.create(engineId, loader.load(engineId))
+            val engine = EngineRegistry.create(
+                engineId,
+                if (engineId in EngineRegistry.MODEL_BASED) loader.load(engineId) else null,
+            )
             val pipeline = StagingPipeline.create(engine) { null } // no learned HMM: defaults
             val result = pipeline.stageNight(
                 featureRows.map { ef -> FloatArray(ef.values.size) { ef.values[it].toFloat() } },

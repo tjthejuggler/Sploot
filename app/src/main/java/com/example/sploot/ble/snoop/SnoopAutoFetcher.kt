@@ -7,16 +7,25 @@ import java.io.InputStream
  * Automated acquisition of the on-device btsnoop log via a privileged shell
  * (Shizuku uid-shell in production; fakes in JVM tests). Fallback chain:
  *
- *  (a) DIRECT_SHELL — `cat /data/misc/bluetooth/logs/btsnoop_hci.log`.
- *      Verified working on Pixel/AOSP-style builds where the bluetooth logs
- *      directory is group-readable by shell (uid 2000).
+ *  (a) DIRECT_SHELL — `cat <candidate path>` for every path in
+ *      [CANDIDATE_PATHS]. Verified working on Pixel/AOSP-style builds where the
+ *      bluetooth logs directory is group-readable by shell (uid 2000).
  *  (b) BUGREPORTZ — `bugreportz -p` (runs dumpstate, which reads the log with
  *      elevated privileges), then stream `cat` the produced zip and extract
- *      only the `FS/data/misc/bluetooth/logs/btsnoop_hci.log` entry via
- *      [BugreportZipEntryExtractor]. Works on builds where (a) is blocked.
+ *      only the btsnoop entry via [BugreportZipEntryExtractor]. Works on builds
+ *      where (a) is blocked.
  *  (c) MANUAL_SAF — outside this class: the Home-screen "Import btsnoop log"
  *      SAF picker (the pre-Phase-12 flow), still available when Shizuku is
  *      unavailable entirely.
+ *
+ * **Rotation handling (on-device failure 2026-11-02):** this device's stack
+ * keeps the log under the vendor path `/data/log/bt/` and rotates at 65,536
+ * records — the whole night ended up in `btsnoop_hci.log.last` while the
+ * current generation only held the morning. For every generation captured,
+ * the sibling `.last` file is also fetched and the two are *logically
+ * concatenated* (older first) into [cacheFile] behind a single btsnoop header,
+ * so a night that straddles a rotation is never split. When only `.last`
+ * exists (fresh post-rotation capture), it is used on its own.
  *
  * Every successful acquisition validates the `btsnoop\0` magic before the
  * bytes are handed anywhere, so a permission-error HTML page or a truncated
@@ -24,13 +33,15 @@ import java.io.InputStream
  */
 class SnoopAutoFetcher(
     private val runner: ShellRunner,
-    private val cacheFile: File,
+    /** Destination for the last successful capture (also read by the Shizuku-down recovery path). */
+    val cacheFile: File,
 ) {
 
     companion object {
         /** Standard AOSP path first, then vendor variants observed in the wild. */
         val CANDIDATE_PATHS = listOf(
             "/data/misc/bluetooth/logs/btsnoop_hci.log",
+            "/data/log/bt/btsnoop_hci.log",
             "/data/misc/bluetooth/btsnoop_hci.log",
             "/data/misc/bludroid/btsnoop_hci.log",
         )
@@ -120,7 +131,7 @@ class SnoopAutoFetcher(
         }
         // Detect (don't trust) size for logging only.
         val sizeField = ls.text.trim().split(Regex("\\s+")).getOrNull(4)
-        val bytes = tryCat(path)
+        val bytes = tryCatGenerations(path)
         return when {
             bytes == null -> DirectFail("cat failed or permission denied")
             bytes < 16L -> {
@@ -135,20 +146,86 @@ class SnoopAutoFetcher(
         }
     }
 
-    /** Streams `cat path` into [cacheFile]; returns bytes written or null on failure. */
-    private fun tryCat(path: String): Long? {
+    /**
+     * Streams the current generation plus, when present, the previous
+     * generation (`<path>.last`) into [cacheFile] as one chronologically
+     * ordered file: `header + older-records + current-records`. Each raw
+     * generation begins with its own 16-byte btsnoop header, so exactly one
+     * header (the current generation's) is kept and both bodies are appended
+     * header-less — a stray embedded header would otherwise be misread as a
+     * corrupt record and abort [BtsnoopParser] at the seam. The current
+     * generation is spooled to a sibling temp file to achieve the ordering
+     * without holding bytes in memory. Returns total bytes written.
+     */
+    private fun tryCatGenerations(path: String): Long? {
         cacheFile.parentFile?.mkdirs()
+        val tmpCur = File(cacheFile.parentFile, cacheFile.name + ".cur")
         return runCatching {
-            val p = runner.exec("cat $path")
-            var written = 0L
-            p.stdout.use { input ->
-                cacheFile.outputStream().use { out ->
-                    written = input.copyTo(out)
+            val current = tryCatTo(path, tmpCur.outputStream()) ?: return null
+            if (current < 16L) {
+                tmpCur.delete()
+                return current
+            }
+            var total = 0L
+            cacheFile.outputStream().use { out ->
+                // 1. header (from the current generation)
+                tmpCur.inputStream().use { tin ->
+                    val header = ByteArray(16)
+                    var off = 0
+                    while (off < 16) {
+                        val n = tin.read(header, off, 16 - off)
+                        if (n < 0) break
+                        off += n
+                    }
+                    out.write(header, 0, off)
+                    total += off
+                }
+                // 2. older records (skip the previous generation's own header)
+                val lastPath = "$path.last"
+                val ls = runCatching { runner.execFully("ls -nl $lastPath") }.getOrNull()
+                if (ls != null && ls.exitCode == 0) {
+                    tryCatTo(lastPath, SkippingAfter16OutputStream(out))
+                }
+                // 3. current records (skip the header already written)
+                tmpCur.inputStream().use { tin ->
+                    if (tin.skip(16L) == 16L) total += tin.copyTo(out)
                 }
             }
+            tmpCur.delete()
+            total
+        }.getOrElse {
+            tmpCur.delete()
+            null
+        }
+    }
+
+    /** Streams `cat path` into [out]; returns bytes written or null on failure. */
+    private fun tryCatTo(path: String, out: java.io.OutputStream): Long? =
+        runCatching {
+            val p = runner.exec("cat $path")
+            var written = 0L
+            p.stdout.use { input -> written = input.copyTo(out) }
             if (p.awaitExit() != 0) null else written
         }.getOrNull()
+
+    /** OutputStream wrapper that silently discards the first 16 bytes (an embedded btsnoop header). */
+    private class SkippingAfter16OutputStream(private val inner: java.io.OutputStream) : java.io.OutputStream() {
+        private var dropped = 0
+        override fun write(b: Int) {
+            if (dropped < 16) dropped++ else inner.write(b)
+        }
+
+        override fun write(b: ByteArray, off: Int, len: Int) {
+            if (dropped >= 16) {
+                inner.write(b, off, len)
+                return
+            }
+            val skip = minOf(16 - dropped, len)
+            dropped += skip
+            if (len > skip) inner.write(b, off + skip, len - skip)
+        }
     }
+
 
     // ---- (b) bugreportz ----
 

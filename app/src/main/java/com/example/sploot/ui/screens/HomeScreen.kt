@@ -59,6 +59,7 @@ class RecordViewModel(private val container: AppContainer) : ViewModel() {
     val connectionState = container.polarClient.connectionState
     val battery = container.polarClient.batteryPercent
     val lastKnownDevice = container.deviceRepo.lastKnownDeviceId
+    val deviceName = container.deviceRepo.lastKnownDeviceName
     val discovered = container.deviceRepo.discovered
     val recordingStatus = container.sessionManager.status
 
@@ -89,6 +90,27 @@ class RecordViewModel(private val container: AppContainer) : ViewModel() {
         collectJob = viewModelScope.launch {
             container.polarClient.hrFlow.collect { _hr.value = it.hr }
         }
+        // Auto-download on connect: whenever the sensor connects (and no
+        // recording is running), pull any new nights off it exactly once per
+        // connection session. Retriggered after a disconnect/reconnect.
+        viewModelScope.launch {
+            var pulledThisConnection = false
+            container.polarClient.connectionState.collect { state ->
+                when (state) {
+                    SensorStatus.ConnectionState.CONNECTED -> {
+                        if (!pulledThisConnection &&
+                            container.morningCapture.status.value is com.example.sploot.ble.snoop.MorningCaptureCoordinator.Status.Idle &&
+                            !recordingStatus.value.active
+                        ) {
+                            pulledThisConnection = true
+                            captureLastNight()
+                        }
+                    }
+                    SensorStatus.ConnectionState.DISCONNECTED -> pulledThisConnection = false
+                    else -> Unit
+                }
+            }
+        }
         refreshOrphans()
         viewModelScope.launch {
             _hasSessions.value = container.sessionRepo.sessions().isNotEmpty()
@@ -118,7 +140,12 @@ class RecordViewModel(private val container: AppContainer) : ViewModel() {
     /** Live status of the automatic morning capture (fetch → process → notify). */
     val captureStatus = container.morningCapture.status
 
-    /** One-tap "Capture last night" — runs the Shizuku fetch + full pipeline. */
+    /**
+     * Downloads the previous night(s) from the sensor: connect-aware pull of
+     * the armband's stored offline recordings, with the Shizuku btsnoop
+     * pipeline as fallback. Runs automatically on connect; this is the retry
+     * entry point.
+     */
     fun captureLastNight() {
         container.appScope.launch {
             runCatching { container.morningCapture.captureNow() }
@@ -201,6 +228,7 @@ fun HomeScreen(
     val conn by viewModel.connectionState.collectAsState()
     val battery by viewModel.battery.collectAsState()
     val lastDevice by viewModel.lastKnownDevice.collectAsState()
+    val deviceName by viewModel.deviceName.collectAsState()
     val discovered by viewModel.discovered.collectAsState()
     val recording by viewModel.recordingStatus.collectAsState()
     val hr by viewModel.hr.collectAsState()
@@ -323,6 +351,78 @@ fun HomeScreen(
             }
         }
 
+        // Previous-night download: runs automatically when the sensor
+        // connects; shows the live progress by device name. One optional
+        // action only — "Try again" after a failure.
+        val cs = captureStatus
+        val deviceLabel = deviceName ?: lastDevice
+        item {
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = when (cs) {
+                        is com.example.sploot.ble.snoop.MorningCaptureCoordinator.Status.Done ->
+                            MaterialTheme.colorScheme.secondaryContainer
+                        is com.example.sploot.ble.snoop.MorningCaptureCoordinator.Status.Failed ->
+                            MaterialTheme.colorScheme.errorContainer
+                        else -> MaterialTheme.colorScheme.surfaceContainer
+                    },
+                ),
+            ) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Last night's sleep", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        when {
+                            deviceLabel != null ->
+                                "$deviceLabel · ${conn.name.lowercase()}${battery?.let { " · $it%" } ?: ""}"
+                            else -> "no Polar device paired yet — pair one in Settings"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    when (cs) {
+                        is com.example.sploot.ble.snoop.MorningCaptureCoordinator.Status.Idle ->
+                            if (conn == SensorStatus.ConnectionState.CONNECTED) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    CircularProgressIndicator(Modifier.height(18.dp))
+                                    Spacer(Modifier.size(8.dp))
+                                    Text("checking the sensor for new nights…")
+                                }
+                            } else {
+                                Text(
+                                    "new nights download automatically when the sensor connects",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        is com.example.sploot.ble.snoop.MorningCaptureCoordinator.Status.Running ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(Modifier.height(18.dp))
+                                Spacer(Modifier.size(8.dp))
+                                Text("${cs.step}…")
+                            }
+                        is com.example.sploot.ble.snoop.MorningCaptureCoordinator.Status.Done ->
+                            Text(
+                                "✓ ${cs.message}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        is com.example.sploot.ble.snoop.MorningCaptureCoordinator.Status.Failed ->
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(cs.message, style = MaterialTheme.typography.bodySmall)
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Button(onClick = { viewModel.captureLastNight() }) {
+                                        Text("Try again")
+                                    }
+                                    OutlinedButton(onClick = { snoopPicker.launch(arrayOf("*/*")) }) {
+                                        Text("Import btsnoop log")
+                                    }
+                                }
+                            }
+                    }
+                }
+            }
+        }
+
         // compact sensor status line (full scan/pair lives in Settings)
         item {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
@@ -362,58 +462,6 @@ fun HomeScreen(
                         } else {
                             Button(onClick = { viewModel.stopRecording() }) { Text("Stop recording") }
                         }
-                        OutlinedButton(onClick = { snoopPicker.launch(arrayOf("*/*")) }) {
-                            Text("Import btsnoop log")
-                        }
-                    }
-                    if (!recording.active) {
-                        Button(onClick = { viewModel.captureLastNight() }) {
-                            Text("Capture last night")
-                        }
-                    }
-                }
-            }
-        }
-
-        // Subtle morning-capture status (auto-run on open or one-tap capture)
-        val cs = captureStatus
-        if (cs !is com.example.sploot.ble.snoop.MorningCaptureCoordinator.Status.Idle) {
-            item {
-                Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = when (cs) {
-                            is com.example.sploot.ble.snoop.MorningCaptureCoordinator.Status.Done ->
-                                MaterialTheme.colorScheme.secondaryContainer
-                            is com.example.sploot.ble.snoop.MorningCaptureCoordinator.Status.Failed ->
-                                MaterialTheme.colorScheme.errorContainer
-                            else -> MaterialTheme.colorScheme.surfaceContainer
-                        },
-                    ),
-                ) {
-                    Column(Modifier.padding(12.dp)) {
-                        Text(
-                            when (cs) {
-                                is com.example.sploot.ble.snoop.MorningCaptureCoordinator.Status.Running ->
-                                    "Auto capture: ${cs.step}…"
-                                is com.example.sploot.ble.snoop.MorningCaptureCoordinator.Status.Done ->
-                                    "Auto capture ✓"
-                                is com.example.sploot.ble.snoop.MorningCaptureCoordinator.Status.Failed ->
-                                    "Auto capture failed"
-                                else -> ""
-                            },
-                            style = MaterialTheme.typography.titleSmall,
-                        )
-                        val detail = when (cs) {
-                            is com.example.sploot.ble.snoop.MorningCaptureCoordinator.Status.Running -> cs.step
-                            is com.example.sploot.ble.snoop.MorningCaptureCoordinator.Status.Done -> cs.message
-                            is com.example.sploot.ble.snoop.MorningCaptureCoordinator.Status.Failed -> cs.message
-                            else -> ""
-                        }
-                        Text(
-                            detail,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
                     }
                 }
             }

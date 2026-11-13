@@ -22,6 +22,7 @@ import java.io.File
 import java.io.InputStream
 import java.time.Instant
 import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -97,6 +98,47 @@ class ProcessNightUseCase(
                 }
             }
             IngestBundle(startMs, ibis, accs)
+        }
+
+    /**
+     * Processes a pre-decoded [RawSample] stream pulled from the sensor's
+     * offline recordings (PPI.REC via the official SDK). Functionally identical
+     * to [processSnoopImport] but takes an in-memory sample list instead of a
+     * byte stream.
+     */
+    suspend fun processOfflineRecording(
+        samples: List<RawSample>,
+        sourcePath: String,
+        onProgress: (ProcessingState) -> Unit = {},
+    ): ProcessingState =
+        process(
+            sessionId = "rec-" + java.time.LocalDateTime.now()
+                .format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")) +
+                "-" + sourcePath.substringAfterLast('/').substringBefore('.'),
+            deviceId = "polar-offline",
+            source = SessionSources.SNOOP_IMPORT, // same diary treatment as snoop nights
+            onProgress = onProgress,
+        ) {
+            val ibis = ArrayList<IbiSample>()
+            val accs = ArrayList<AccSample>()
+            var minTs = Long.MAX_VALUE
+            for (sample in samples) {
+                when (sample) {
+                    is IbiSample -> {
+                        ibis.add(sample)
+                        if (sample.timestampMs < minTs) minTs = sample.timestampMs
+                    }
+                    is AccSample -> {
+                        accs.add(sample)
+                        if (sample.timestampMs < minTs) minTs = sample.timestampMs
+                    }
+                    else -> Unit
+                }
+            }
+            if (ibis.isEmpty() && accs.isEmpty()) {
+                throw IllegalArgumentException("recording $sourcePath contains no usable samples")
+            }
+            IngestBundle(minTs, ibis, accs)
         }
 
     /** Processes a btsnoop import: decodes the stream first, then the shared pipeline. */
@@ -185,8 +227,8 @@ class ProcessNightUseCase(
             )
 
             onProgress(ProcessingState.Running("persisting", 0.75f))
-            repo.createSession(
-                SessionEntity(
+            val summary = repo.persistNightAtomic(
+                session = SessionEntity(
                     id = sessionId,
                     startEpochMs = startMs,
                     endEpochMs = epochs.last().endMs,
@@ -200,9 +242,7 @@ class ProcessNightUseCase(
                     },
                     sleepSummaryJson = null,
                 ),
-            )
-            repo.insertEpochFeatures(
-                featureRows.map { ef ->
+                features = featureRows.map { ef ->
                     EpochFeatureEntity(
                         sessionId = sessionId,
                         epochIndex = ef.epochIndex,
@@ -211,9 +251,7 @@ class ProcessNightUseCase(
                         validIbiCount = epochs[ef.epochIndex].ibis.size,
                     )
                 },
-            )
-            repo.insertStages(
-                result.stages.indices.map { i ->
+                stages = result.stages.indices.map { i ->
                     StageEntity(
                         sessionId = sessionId,
                         epochIndex = i,
@@ -222,9 +260,7 @@ class ProcessNightUseCase(
                         engineId = result.engineId,
                     )
                 },
-            )
-            repo.insertIntervals(
-                ibis.map {
+                intervals = ibis.map {
                     RawIntervalEntity(
                         sessionId = sessionId,
                         timestampMs = it.timestampMs,
@@ -238,7 +274,6 @@ class ProcessNightUseCase(
             )
 
             onProgress(ProcessingState.Running("summarising", 0.9f))
-            val summary = repo.computeAndStoreSummary(sessionId)
             val date = Instant.ofEpochMilli(startMs).atZone(ZoneId.systemDefault()).toLocalDate()
             recoveryRepo.computeMorningScore(date)
             val done = ProcessingState.Done(sessionId, summary)

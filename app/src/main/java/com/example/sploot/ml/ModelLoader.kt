@@ -86,8 +86,8 @@ class ModelLoader(
         return LoadedModel(bytes, parseAndValidate(metaText, engineId))
     }
 
-    /** Load both engines' models in one go (registry ids from [EngineRegistry.ALL]). */
-    fun loadAll(): Map<String, LoadedModel> = EngineRegistry.ALL.associateWith { load(it) }
+    /** Load the model-based engines' models in one go (heuristic needs none). */
+    fun loadAll(): Map<String, LoadedModel> = EngineRegistry.MODEL_BASED.associateWith { load(it) }
 
     /**
      * Install a user-supplied replacement: validates bytes (OrtSession opens) and

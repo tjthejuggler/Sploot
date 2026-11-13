@@ -145,6 +145,7 @@ class SnoopAutoFetchTest {
     private val P0 = SnoopAutoFetcher.CANDIDATE_PATHS[0]
     private val P1 = SnoopAutoFetcher.CANDIDATE_PATHS[1]
     private val P2 = SnoopAutoFetcher.CANDIDATE_PATHS[2]
+    private val P3 = SnoopAutoFetcher.CANDIDATE_PATHS[3]
     private val ZIP = "/bugreport/bugreport-Sploot-2026.zip"
 
     @Test
@@ -154,6 +155,7 @@ class SnoopAutoFetchTest {
             script = mapOf(
                 "ls -nl $P0" to Scripted(0, "-rw-rw---- 1 root bluetooth ${log.size} 2026-11-01 btsnoop_hci.log\n".toByteArray()),
                 "cat $P0" to Scripted(0, log),
+                "ls -nl $P0.last" to Scripted(1, "No such file".toByteArray()),
             ),
         )
         val (fetcher, cache) = fetcher(runner)
@@ -178,6 +180,7 @@ class SnoopAutoFetchTest {
                 "ls -nl $P0" to Scripted(1, "ls: $P0: Permission denied".toByteArray()),
                 "ls -nl $P1" to Scripted(1, "ls: $P1: Permission denied".toByteArray()),
                 "ls -nl $P2" to Scripted(1, "ls: $P2: Permission denied".toByteArray()),
+                "ls -nl $P3" to Scripted(1, "ls: $P3: Permission denied".toByteArray()),
                 "bugreportz -p" to Scripted(0, "PROGRESS:1/1\nOK: $ZIP\n".toByteArray()),
                 "cat '$ZIP'" to Scripted(0, zip),
                 "rm -f '$ZIP'" to Scripted(0, ByteArray(0)),
@@ -206,6 +209,7 @@ class SnoopAutoFetchTest {
                 "ls -nl $P0" to Scripted(1, "ls: $P0: Permission denied".toByteArray()),
                 "ls -nl $P1" to Scripted(1, ByteArray(0)),
                 "ls -nl $P2" to Scripted(1, ByteArray(0)),
+                "ls -nl $P3" to Scripted(1, ByteArray(0)),
                 "bugreportz -p" to Scripted(0, "OK: $ZIP\n".toByteArray()),
                 "cat '$ZIP'" to Scripted(141, zip),
                 "rm -f '$ZIP'" to Scripted(0, ByteArray(0)),
@@ -231,6 +235,7 @@ class SnoopAutoFetchTest {
                 "ls -nl $P0" to Scripted(1, ByteArray(0)),
                 "ls -nl $P1" to Scripted(1, ByteArray(0)),
                 "ls -nl $P2" to Scripted(1, ByteArray(0)),
+                "ls -nl $P3" to Scripted(1, ByteArray(0)),
                 "bugreportz -p" to Scripted(0, "OK: $ZIP\n".toByteArray()),
                 "cat '$ZIP'" to Scripted(9, zip),
                 "rm -f '$ZIP'" to Scripted(0, ByteArray(0)),
@@ -251,6 +256,7 @@ class SnoopAutoFetchTest {
             script = mapOf(
                 "ls -nl $P0" to Scripted(0, "x".toByteArray()),
                 "cat $P0" to Scripted(0, log),
+                "ls -nl $P0.last" to Scripted(1, "No such file".toByteArray()),
             ),
         )
         val (fetcher, _) = fetcher(runner)
@@ -265,14 +271,85 @@ class SnoopAutoFetchTest {
         )
     }
 
+    /** Regression (on-device 2026-11-02): when `.last` exists the two
+     *  generations are concatenated older-first behind one header. */
+    @Test
+    fun `fetches and concatenates the previous generation when present`() {
+        val older = btsnoopBytes()
+        val current = btsnoopBytes()
+        val runner = FakeShellRunner(
+            script = mapOf(
+                "ls -nl $P0" to Scripted(0, "-rw-rw---- 1 root bluetooth ${current.size} btsnoop_hci.log\n".toByteArray()),
+                "cat $P0" to Scripted(0, current),
+                "ls -nl $P0.last" to Scripted(0, "-rw-rw---- 1 root bluetooth ${older.size} btsnoop_hci.log.last\n".toByteArray()),
+                "cat $P0.last" to Scripted(0, older),
+            ),
+        )
+        val (fetcher, cache) = fetcher(runner)
+
+        val r = fetcher.fetch()
+
+        assertTrue("expected success, got $r", r is SnoopAutoFetcher.Result.Success)
+        // cache = current header + current body + older records
+        val got = cache.readBytes()
+        assertTrue("header preserved", got.copyOfRange(0, 16).contentEquals(current.copyOfRange(0, 16)))
+        val expected = current.copyOfRange(16, current.size) + older.copyOfRange(16, older.size)
+        assertEquals(16 + expected.size, got.size)
+        assertTrue(got.copyOfRange(16, got.size).contentEquals(expected))
+    }
+
+    /** `.last` absent (fresh boot / no rotation) behaves exactly like before. */
+    @Test
+    fun `fetches current generation only when no last file exists`() {
+        val log = btsnoopBytes()
+        val runner = FakeShellRunner(
+            script = mapOf(
+                "ls -nl $P0" to Scripted(0, "x".toByteArray()),
+                "cat $P0" to Scripted(0, log),
+                "ls -nl $P0.last" to Scripted(1, "No such file".toByteArray()),
+            ),
+        )
+        val (fetcher, cache) = fetcher(runner)
+
+        val r = fetcher.fetch()
+
+        assertTrue(r is SnoopAutoFetcher.Result.Success)
+        assertTrue(cache.readBytes().contentEquals(log))
+    }
+
+    @Test
+    fun `vendor path P1 with last generation is found when standard path missing`() {
+        val older = btsnoopBytes()
+        val current = btsnoopBytes()
+        val script = mutableMapOf(
+            "ls -nl $P0" to Scripted(1, "Permission denied".toByteArray()),
+            "ls -nl $P1" to Scripted(0, "x".toByteArray()),
+            "cat $P1" to Scripted(0, current),
+            "ls -nl $P1.last" to Scripted(0, "x".toByteArray()),
+            "cat $P1.last" to Scripted(0, older),
+        )
+        val (fetcher, cache) = fetcher(FakeShellRunner(script = script))
+
+        val r = fetcher.fetch()
+
+        assertTrue("expected vendor-path success, got $r", r is SnoopAutoFetcher.Result.Success)
+        r as SnoopAutoFetcher.Result.Success
+        assertEquals(SnoopAutoFetcher.Method.DIRECT_SHELL, r.method)
+        val got = cache.readBytes()
+        val expected = current.copyOfRange(16, current.size) + older.copyOfRange(16, older.size)
+        assertTrue(got.copyOfRange(16, got.size).contentEquals(expected))
+    }
+
     @Test
     fun `garbage from cat is rejected by the magic check`() {
         val runner = FakeShellRunner(
             script = mapOf(
                 "ls -nl $P0" to Scripted(0, "x".toByteArray()),
                 "cat $P0" to Scripted(0, "<html>Permission denied</html>".toByteArray()),
+                "ls -nl $P0.last" to Scripted(1, ByteArray(0)),
                 "ls -nl $P1" to Scripted(1, ByteArray(0)),
                 "ls -nl $P2" to Scripted(1, ByteArray(0)),
+                "ls -nl $P3" to Scripted(1, ByteArray(0)),
                 "bugreportz -p" to Scripted(1, "bugreportz: not found".toByteArray()),
             ),
         )

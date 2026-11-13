@@ -16,7 +16,10 @@ import com.polar.sdk.api.model.EcgSample as PolarEcgSample
 import com.polar.sdk.api.model.PolarAccelerometerData
 import com.polar.sdk.api.model.PolarDeviceInfo
 import com.polar.sdk.api.model.PolarHrData
+import com.polar.sdk.api.model.PolarOfflineRecordingData
+import com.polar.sdk.api.model.PolarOfflineRecordingEntry
 import com.polar.sdk.api.model.PolarPpiData
+import com.polar.sdk.api.model.PolarRecordingSecret
 import com.polar.sdk.api.model.PolarSensorSetting
 import io.reactivex.rxjava3.core.Flowable
 import io.reactivex.rxjava3.core.Single
@@ -59,6 +62,7 @@ class PolarBleClient(context: Context) {
             PolarBleApi.PolarBleSdkFeature.FEATURE_DEVICE_INFO,
             PolarBleApi.PolarBleSdkFeature.FEATURE_BATTERY_INFO,
             PolarBleApi.PolarBleSdkFeature.FEATURE_POLAR_ONLINE_STREAMING,
+            PolarBleApi.PolarBleSdkFeature.FEATURE_POLAR_OFFLINE_RECORDING,
         )
     )
 
@@ -86,10 +90,15 @@ class PolarBleClient(context: Context) {
     private val _streamingReady = MutableStateFlow(false)
     val streamingReady: StateFlow<Boolean> = _streamingReady.asStateFlow()
 
+    /** True once the offline-recording feature is ready for the connected device. */
+    private val _offlineRecordingReady = MutableStateFlow(false)
+    val offlineRecordingReady: StateFlow<Boolean> = _offlineRecordingReady.asStateFlow()
+
     private var connectedDeviceId: String? = null
     private val streamDisposables = mutableListOf<Disposable>()
 
     init {
+        api.setApiLogger { msg -> Log.d(TAG, "sdk: $msg") }
         api.setAutomaticReconnection(false) // reconnection is owned by PolarDeviceRepository
         api.setApiCallback(object : PolarBleApiCallback() {
             override fun deviceConnecting(info: PolarDeviceInfo) {
@@ -105,6 +114,7 @@ class PolarBleClient(context: Context) {
                 stopAllStreams()
                 connectedDeviceId = null
                 _streamingReady.value = false
+                _offlineRecordingReady.value = false
                 _connectionState.value = SensorStatus.ConnectionState.DISCONNECTED
             }
 
@@ -115,6 +125,9 @@ class PolarBleClient(context: Context) {
             override fun bleSdkFeatureReady(id: String, feature: PolarBleApi.PolarBleSdkFeature) {
                 if (feature == PolarBleApi.PolarBleSdkFeature.FEATURE_POLAR_ONLINE_STREAMING) {
                     _streamingReady.value = true
+                }
+                if (feature == PolarBleApi.PolarBleSdkFeature.FEATURE_POLAR_OFFLINE_RECORDING) {
+                    _offlineRecordingReady.value = true
                 }
             }
 
@@ -320,6 +333,40 @@ class PolarBleClient(context: Context) {
         runCatching { api.stopStreaming(id, PmdMeasurementType.ACC) }
         runCatching { api.stopStreaming(id, PmdMeasurementType.ECG) }
         runCatching { api.stopStreaming(id, PmdMeasurementType.PPG) }
+    }
+
+    // ---- offline recordings (sensor-internal .REC files) ----
+
+    /**
+     * Lists the offline recordings stored in the sensor's internal memory.
+     * The recording survives anything that happens to the phone's btsnoop log
+     * — this is the authoritative morning source (Sleep2 reads the same files).
+     */
+    fun listOfflineRecordings(deviceId: String): Flow<PolarOfflineRecordingEntry> =
+        api.listOfflineRecordings(deviceId).rxToFlow()
+
+    /**
+     * Downloads one offline recording. The sensor stores recordings unencrypted
+     * unless a device secret was configured (Sploot never sets one). The SDK's
+     * Kotlin signature is `PolarRecordingSecret?` — passing null selects the
+     * no-decryption path; a non-null secret makes the SDK AES-decrypt the file,
+     * which fails on plain recordings (verified on-device 2026-11-02:
+     * IllegalBlockSizeException). Kotlin's compiler inserts a null-check on the
+     * platform-type call site, so the null is passed via reflection.
+     */
+    fun getOfflineRecord(
+        deviceId: String,
+        entry: PolarOfflineRecordingEntry,
+    ): Flow<PolarOfflineRecordingData> {
+        val single = PolarBleApi::class.java
+            .getMethod(
+                "getOfflineRecord",
+                String::class.java,
+                PolarOfflineRecordingEntry::class.java,
+                PolarRecordingSecret::class.java,
+            )
+            .invoke(api, deviceId, entry, null) as Single<PolarOfflineRecordingData>
+        return single.rxToFlow()
     }
 
     /** Snapshot of device status for the notification/UI. */

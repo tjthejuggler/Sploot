@@ -11,17 +11,33 @@ import com.example.sploot.data.db.SplootDatabase
 import com.example.sploot.data.db.StageEntity
 import java.time.Instant
 import java.time.ZoneId
+import androidx.room.withTransaction
 import kotlinx.serialization.json.Json
 
 /**
  * Repository over the Room schema: session lifecycle, chunked bulk inserts
  * for derived rows, and the queries the UI/export layers need.
  */
-class SessionRepository(private val db: SplootDatabase) {
+open class SessionRepository(private val db: SplootDatabase) {
 
-    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+    // allowSpecialFloatingPointValues: SleepSummary metrics can be NaN on
+    // partial-signal nights (e.g. PPI-only offline recordings with no
+    // accelerometer); nullable fields cover most, NaN guards the rest.
+    private val json = Json {
+        ignoreUnknownKeys = true
+        encodeDefaults = true
+        allowSpecialFloatingPointValues = true
+    }
 
     private val sessionDao: SessionDao = db.sessionDao()
+
+    /**
+     * Transaction boundary. Real Room transactions in production; JVM fakes
+     * (ProcessNightEdgeCaseTest) override this to run the block directly —
+     * Room's `withTransaction` needs runtime machinery fakes cannot provide.
+     */
+    internal open suspend fun <T> inTransaction(block: suspend () -> T): T =
+        db.withTransaction { block() }
 
     companion object {
         /** Chunk sizes keep SQLite bind-variable counts comfortably low. */
@@ -39,6 +55,40 @@ class SessionRepository(private val db: SplootDatabase) {
 
     suspend fun deleteSession(id: String) = sessionDao.delete(id)
 
+    /**
+     * Atomically persists one processed night: session row, epoch features,
+     * stages and raw intervals all commit (or roll back) together, then the
+     * summary is computed inside the same transaction. This closes the
+     * kill-mid-persist window that produced a ghost session row with no
+     * children on-device (2026-11-02): a process death now leaves either
+     * nothing or a complete night.
+     *
+     * @return the computed [SleepSummary], or null when nothing usable.
+     */
+    suspend fun persistNightAtomic(
+        session: SessionEntity,
+        features: List<EpochFeatureEntity>,
+        stages: List<StageEntity>,
+        intervals: List<RawIntervalEntity>,
+    ): SleepSummary? = inTransaction {
+        sessionDao.upsert(session)
+        features.chunked(FEATURE_CHUNK).forEach { db.epochFeatureDao().insertAll(it) }
+        stages.chunked(STAGE_CHUNK).forEach { db.stageDao().insertAll(it) }
+        intervals.chunked(IBI_CHUNK).forEach { db.rawIntervalDao().insertAll(it) }
+        // Summary from the rows just written (same transaction, sees them all).
+        val summary = SummaryCalculator.calculate(
+            stages = stages.map { StagePoint(it.epochIndex.toLong(), it.stage) },
+            ibis = intervals.map { IbiPoint(it.timestampMs, it.intervalMs) },
+        )
+        if (stages.isEmpty() && intervals.isEmpty()) {
+            null
+        } else {
+            sessionDao.storeSummary(session.id, json.encodeToString(SleepSummary.serializer(), summary))
+            upsertBaselineFromSummary(session, summary)
+            summary
+        }
+    }
+
     // ---- bulk inserts ----
 
     suspend fun insertEpochFeatures(rows: List<EpochFeatureEntity>) =
@@ -52,6 +102,63 @@ class SessionRepository(private val db: SplootDatabase) {
 
     suspend fun insertComparisons(rows: List<ComparisonEntity>) =
         rows.chunked(STAGE_CHUNK).forEach { db.comparisonDao().insertAll(it) }
+
+    /**
+     * Sessions from a snoop import with no derived rows — the process died
+     * between the session upsert and the child inserts (non-atomic persist,
+     * on-device 2026-11-02). They would show up as empty ghost nights in the
+     * diary, so they are removed before a retry.
+     */
+    suspend fun deleteOrphanSnoopSessions(): Int {
+        val orphans = sessionDao.all().filter {
+            it.source == "SNOOP_IMPORT" &&
+                db.stageDao().forSession(it.id).isEmpty() &&
+                db.rawIntervalDao().forSession(it.id).isEmpty()
+        }
+        orphans.forEach { sessionDao.delete(it.id) }
+        return orphans.size
+    }
+
+    /**
+     * Keeps only the best `rec-*` session per calendar start-date, deleting
+     * re-staged duplicates (the same sensor recording re-imported after an
+     * engine fix — on-device 2026-11-02 left two Nov-1 nights side by side).
+     *
+     * "Best" = the session with the most derived stage rows; ties break on the
+     * lexicographically greatest id (later import). A placeholder-staged row
+     * (uniform stages from a fixed-prior model) and a real staged row have the
+     * same stage count only when both ran the same engine, in which case the
+     * later import wins.
+     *
+     * @return number of deleted duplicates.
+     */
+    suspend fun dedupeRecordingSessions(): Int {
+        val recs = sessionDao.all().filter { it.id.startsWith("rec-") }
+        if (recs.size < 2) return 0
+        data class Score(val id: String, val date: String, val stageRows: Int, val idScore: String)
+        val scored = recs.map { s ->
+            Score(
+                id = s.id,
+                date = java.time.Instant.ofEpochMilli(s.startEpochMs)
+                    .atZone(java.time.ZoneId.systemDefault()).toLocalDate().toString(),
+                stageRows = db.stageDao().forSession(s.id).size,
+                idScore = s.id,
+            )
+        }
+        val keep = scored.groupBy { it.date }.map { (_, group) ->
+            group.maxWithOrNull(
+                compareBy({ it.stageRows }, { it.idScore }),
+            )?.id
+        }.filterNotNull().toSet()
+        var deleted = 0
+        for (s in recs) {
+            if (s.id !in keep) {
+                sessionDao.delete(s.id)
+                deleted++
+            }
+        }
+        return deleted
+    }
 
     // ---- queries ----
 

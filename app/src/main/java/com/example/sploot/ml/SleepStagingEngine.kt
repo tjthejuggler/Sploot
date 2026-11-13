@@ -48,20 +48,39 @@ object EngineRegistry {
     /** Per-epoch gradient-boosted tree reference model via ONNX Runtime. */
     const val GBDT = "sploot-gbdt"
 
-    val ALL = setOf(SEQ, GBDT)
+    /**
+     * Physiologically-grounded heuristic stager. Default until trained ONNX
+     * models ship (the bundled sploot-seq/gbdt files are placeholders emitting
+     * a fixed class prior regardless of input — verified on-device 2026-11-02).
+     */
+    const val HEURISTIC = "sploot-heuristic"
+
+    val ALL = setOf(HEURISTIC, SEQ, GBDT)
+
+    /** Engine ids that require a loadable ONNX model file. */
+    val MODEL_BASED = setOf(SEQ, GBDT)
 
     /**
      * @throws IllegalArgumentException unknown engine id, or model metadata whose
      *   engineId does not match [engineId].
      */
-    fun create(engineId: String, model: LoadedModel): SleepStagingEngine {
-        require(model.metadata.engineId == engineId) {
-            "model metadata engineId '${model.metadata.engineId}' != requested '$engineId'"
-        }
-        return when (engineId) {
-            SEQ -> OnnxSequenceEngine(model)
-            GBDT -> GbdtReferenceEngine(model)
+    fun create(engineId: String, model: LoadedModel?): SleepStagingEngine =
+        when (engineId) {
+            HEURISTIC -> HeuristicStagingEngine()
+            SEQ -> {
+                val m = requireNotNull(model) { "engine '$engineId' requires a loaded model" }
+                require(m.metadata.engineId == engineId) {
+                    "model metadata engineId '${m.metadata.engineId}' != requested '$engineId'"
+                }
+                OnnxSequenceEngine(m)
+            }
+            GBDT -> {
+                val m = requireNotNull(model) { "engine '$engineId' requires a loaded model" }
+                require(m.metadata.engineId == engineId) {
+                    "model metadata engineId '${m.metadata.engineId}' != requested '$engineId'"
+                }
+                GbdtReferenceEngine(m)
+            }
             else -> throw IllegalArgumentException("unknown engine id: $engineId")
         }
-    }
 }

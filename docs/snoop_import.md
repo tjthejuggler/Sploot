@@ -87,7 +87,19 @@ replay, exactly as the live stack discovered it during the night.
 - Timestamps: PMD frames carry epoch-nanosecond timestamps and are preferred; records
   without a plausible embedded timestamp fall back to the btsnoop capture clock.
 
-## 5. Fully automatic morning flow (Phase 12 — Shizuku)
+## 5. Sleep staging engine
+
+The bundled ONNX models (`sploot-seq`, `sploot-gbdt`) are **placeholders** that
+emit a fixed class prior regardless of input — every real night staged as
+constant Light (on-device 2026-11-02). Until trained models ship, the default
+engine is `sploot-heuristic` ([HeuristicStagingEngine]): a physiologically-
+grounded stager over the same 127-feature per-night-normalized matrix —
+vagal tone (rMSSD/SDNN/SD1), mean IBI, LF/HF balance, pNN50, and accelerometer
+ENMO when present. A nightly deep-anchor self-calibrates the Deep threshold to
+the individual's own vagal range. The Viterbi smoother enforces continuity.
+Training real models remains the end goal (`ml_pipeline/train_*.py`).
+
+## 6. Fully automatic morning flow (Phase 12/13 — Shizuku + sensor pull)
 
 With Shizuku set up, the manual steps in sections 3–4 disappear entirely.
 
@@ -112,28 +124,51 @@ Nothing. Sleep with the sensor as usual; Android's stack writes the snoop log.
 
 ### Morning
 
-Just **open Sploot**. On app start `MorningCaptureCoordinator` runs:
+Just **open Sploot**. On app start `MorningCaptureCoordinator` runs, in order:
 
-1. `SnoopAutoFetcher` acquires the log with shell (uid 2000) privileges:
-   (a) direct `cat /data/misc/bluetooth/logs/btsnoop_hci.log` (standard path,
-   plus two vendor alternates); (b) if that is permission-blocked,
-   `bugreportz -p`, streaming only the
-   `FS/data/misc/bluetooth/logs/btsnoop_hci.log` entry out of the produced
-   zip (the zip itself never lands in app storage); (c) if Shizuku is
-   unavailable, the manual SAF import remains on the Record tab.
-   Every acquisition is verified against the `btsnoop\0` magic before parsing.
-2. The log's fingerprint (size + SHA-256) is compared with the last import —
-   unchanged logs are skipped, so nothing is reprocessed.
-3. Changed logs run through the normal snoop ingest → `ProcessNightUseCase`
-   pipeline in the background and a **morning notification** (sleep time, deep
-   /REM minutes, recovery score, koala icon) is posted.
-4. If the log *shrank* overnight (rotation/truncation), the status and the
-   notification warn that part of the night may be missing and suggest
-   disconnecting other Bluetooth devices (Garmin) overnight.
+1. **Sensor pull (primary, Phase 13):** finds the Polar (last-known id, else a
+   12 s BLE scan), connects, and downloads every not-yet-imported PPI offline
+   recording from the sensor's internal memory via the official SDK
+   (`PolarOfflineRecordingPuller`). This needs **no Shizuku and no btsnoop
+   log at all** — the sensor is the recorder, so log rotation, cache
+   overwrites and Shizuku outages cannot lose the night.
+2. **btsnoop fallback:** `SnoopAutoFetcher` acquires the log with shell
+   (uid 2000) privileges: (a) direct `cat` over every path in
+   `CANDIDATE_PATHS` (AOSP + vendor variants, this device's is
+   `/data/log/bt/btsnoop_hci.log`); (b) if permission-blocked, `bugreportz -p`
+   streaming only the btsnoop entries out of the produced zip. Both rotation
+   generations are fetched when present and concatenated
+   (`header + old records + new records`) so a night split by the 65,536-record
+   rotation is never lost (on-device failure 2026-11-02: the whole night lived
+   in `btsnoop_hci.log.last`).
+3. **Cached-capture recovery:** when Shizuku is down but a previous capture is
+   cached, and the stored fingerprint predates the current ingest version, the
+   cached capture is reprocessed directly — decoding fixes auto-recover
+   previously-failed nights.
+4. Fingerprint change detection skips unchanged logs; changed logs run through
+   `SnoopIngestSession` → `ProcessNightUseCase` and a **morning notification**
+   (sleep time, deep/REM minutes, recovery score, koala icon) is posted.
+
+Persist is atomic (`SessionRepository.persistNightAtomic`): session row,
+features, stages and intervals commit in one Room transaction, then the
+summary is computed inside it — a process death mid-persist leaves nothing
+rather than a ghost row with time-but-no-stages. Orphan snoop sessions from
+earlier crashes are purged before a retry.
 
 A one-tap **"Capture last night"** button on the Record tab triggers the same
 flow manually, and the toggle in Settings disables the automatic run if you
 prefer explicit control.
+
+### Polar offline-recording transfers inside the snoop log
+
+When a third-party app (Sleep2, Polar Flow) reads the sensor's offline
+recordings over BLE, that transfer transits the captured btsnoop log even
+though no live PMD streaming ever happened. `PolarOfflineRecordingDecoder`
+recovers it content-based (arming on the `/U/<uid>/<date>/R/<time>/PHYSDATA/
+*.REC` write, parsing `[seq u8][6-byte records]` packets, ppi ms at field +4,
+anchored on the ASCII UTC start in the metadata packets). This rescued the
+2026-11-02 night (8.14 h, 97.8 % valid PPI) after the "no IBI/ACC samples"
+failure.
 
 ### Implementation notes
 

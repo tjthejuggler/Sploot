@@ -61,25 +61,42 @@ class PolarDeviceRepository(
     companion object {
         private const val TAG = "PolarDeviceRepository"
         private val KEY_DEVICE_ID = stringPreferencesKey("last_device_id")
+        private val KEY_DEVICE_NAME = stringPreferencesKey("last_device_name")
         private const val SCAN_TIMEOUT_MS = 15_000L
     }
 
     private val _lastKnownDeviceId = MutableStateFlow<String?>(null)
     val lastKnownDeviceId: StateFlow<String?> = _lastKnownDeviceId.asStateFlow()
 
+    /** Human-readable name of the last-known device (e.g. "Polar Verity Sense"), for UI display. */
+    private val _lastKnownDeviceName = MutableStateFlow<String?>(null)
+    val lastKnownDeviceName: StateFlow<String?> = _lastKnownDeviceName.asStateFlow()
+
     private val _discovered = MutableStateFlow<List<DiscoveredDevice>>(emptyList())
     val discovered: StateFlow<List<DiscoveredDevice>> = _discovered.asStateFlow()
 
     private var reconnectJob: Job? = null
 
-    /** Loads the persisted device id into [lastKnownDeviceId]. */
+    /** Loads the persisted device id/name into the last-known flows. */
     suspend fun loadLastKnownDevice() {
-        _lastKnownDeviceId.value = context.devicePrefs.data.first()[KEY_DEVICE_ID]
+        val prefs = context.devicePrefs.data.first()
+        _lastKnownDeviceId.value = prefs[KEY_DEVICE_ID]
+        _lastKnownDeviceName.value = prefs[KEY_DEVICE_NAME]
     }
 
-    suspend fun setLastKnownDevice(deviceId: String) {
-        context.devicePrefs.edit { it[KEY_DEVICE_ID] = deviceId }
+    suspend fun setLastKnownDevice(deviceId: String, name: String? = null) {
+        context.devicePrefs.edit {
+            it[KEY_DEVICE_ID] = deviceId
+            if (name != null) it[KEY_DEVICE_NAME] = name
+        }
         _lastKnownDeviceId.value = deviceId
+        if (name != null) _lastKnownDeviceName.value = name
+    }
+
+    /** Updates just the stored display name (e.g. refreshed during a scan). */
+    suspend fun setLastKnownDeviceName(name: String) {
+        context.devicePrefs.edit { it[KEY_DEVICE_NAME] = name }
+        _lastKnownDeviceName.value = name
     }
 
     /**
@@ -101,6 +118,12 @@ class PolarDeviceRepository(
                             val row = DiscoveredDevice(info.deviceId, info.name, info.rssi, true)
                             seen[info.deviceId] = row
                             _discovered.value = seen.values.sortedByDescending { it.rssi }
+                            // Keep the stored display name fresh for the paired sensor.
+                            if (info.deviceId == _lastKnownDeviceId.value &&
+                                info.name.isNotBlank() && info.name != _lastKnownDeviceName.value
+                            ) {
+                                runCatching { setLastKnownDeviceName(info.name) }
+                            }
                             emit(row)
                         }
                     }
@@ -110,9 +133,9 @@ class PolarDeviceRepository(
             }
         }
 
-    /** Connects to [deviceId], persists it, and (re)starts the reconnection loop. */
-    suspend fun connectAndRemember(deviceId: String) {
-        setLastKnownDevice(deviceId)
+    /** Connects to [deviceId], persists it (plus an optional display name), and (re)starts the reconnection loop. */
+    suspend fun connectAndRemember(deviceId: String, name: String? = null) {
+        setLastKnownDevice(deviceId, name)
         client.connect(deviceId)
         startAutoReconnect(deviceId)
     }

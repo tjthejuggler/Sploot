@@ -127,7 +127,10 @@ class ProcessNightEdgeCaseTest {
     @get:Rule val tmp = TemporaryFolder()
 
     private fun useCase(db: FakeDb = FakeDb()): ProcessNightUseCase = ProcessNightUseCase(
-        repo = SessionRepository(db),
+        repo = object : SessionRepository(db) {
+            @Suppress("UNCHECKED_CAST")
+            override suspend fun <T> inTransaction(block: suspend () -> T): T = block() as T
+        },
         recoveryRepo = RecoveryRepository(db.baselines),
         engineProvider = { FakeEngine() },
         assets = { null },

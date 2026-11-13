@@ -181,3 +181,17 @@ Taste-level pass. The koala retreats; its world steps forward.
   bands. Copy is quiet lowercase throughout ("last night", "sleep well").
 - No functional changes; 151 unit tests, lint, assembleDebug, installDebug
   all green.
+
+## 2026-11-13 — Sensor-first morning capture & clear download UX
+- Fixed "Capture last night" doing nothing: `MorningCaptureCoordinator.captureNow()`
+  now pulls the Polar sensor's offline recordings FIRST and only falls back to
+  the Shizuku btsnoop pipeline; `maybeAutoCapture` also runs the sensor pull
+  regardless of the auto-capture toggle.
+- Home screen: one "Last night's sleep" card that shows the device by NAME
+  (persisted in DataStore alongside its id, refreshed on scan/pair), the live
+  download steps (connecting / downloading <date> night / processing), and a
+  single "Try again" button that only appears after a failure. Automatic
+  download triggers whenever the sensor connects (once per connection session,
+  skipped while a recording is active). The old duplicate "Capture last night"
+  button, always-visible "Import btsnoop log" button and separate auto-capture
+  status card are gone (btsnoop import remains as a failure-path fallback).

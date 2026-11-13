@@ -13,7 +13,15 @@ import kotlinx.serialization.json.Json
  */
 class Converters {
 
-    private val json = Json { encodeDefaults = true }
+    // allowSpecialFloatingPointValues: feature vectors legitimately contain NaN
+    // (e.g. actigraphy features on a PPI-only night with no accelerometer).
+    // kotlinx-serialization rejects NaN by default, which crashed persisting a
+    // fully-decoded sensor recording (on-device 2026-11-02). ONNX runtime
+    // treats NaN features as missing, so round-tripping them is safe.
+    private val json = Json {
+        encodeDefaults = true
+        allowSpecialFloatingPointValues = true
+    }
     private val floatList = ListSerializer(Float.serializer())
     private val doubleList = ListSerializer(Double.serializer())
 

@@ -43,6 +43,14 @@ data class SleepSummary(
     val lowestRhrBpm: Double?,
     /** rMSSD over the night's IBI series (successive-difference RMS, in ms). */
     val meanRmssdMs: Double?,
+    /** Lowest instantaneous HR over the night (60 000 / max IBI), bpm. */
+    val minHrBpm: Double? = null,
+    /** Highest instantaneous HR over the night (60 000 / min IBI), bpm. */
+    val maxHrBpm: Double? = null,
+    /** Mean HR over the night (beats weighted by their intervals), bpm. */
+    val avgHrBpm: Double? = null,
+    /** Mean SDNN over the night (ms) — overall HRV magnitude. */
+    val avgSdnnMs: Double? = null,
 )
 
 /**
@@ -84,9 +92,31 @@ object SummaryCalculator {
         else ordered.drop(firstSleepIdx + 1).count { it.stage == SleepStages.WAKE }
         val wasoEpisodes = if (firstSleepIdx < 0) 0 else countWakeRuns(ordered.drop(firstSleepIdx + 1))
 
-        val cleanIbis = ibis
+        // Physiological band 300..2000 ms (30..200 bpm) plus a Kubios-style
+        // 20% ectopic screen vs the local 5-beat moving median: drops artifact
+        // beats that would poison rMSSD/SDNN/lowest-RHR and the HR min/max
+        // stats (raw 30/172 bpm extremes on 2026-11-02 were ectopics inside
+        // the band).
+        val bandIbis = ibis
             .sortedBy { it.timestampMs }
-            .filter { it.intervalMs > 0 }
+            .filter { it.intervalMs in 300..2000 }
+        val ectopicFlags = BooleanArray(bandIbis.size) { false }
+        for (i in bandIbis.indices) {
+            val w = ((i - 2).coerceAtLeast(0)..(i + 2).coerceAtMost(bandIbis.size - 1))
+                .map { bandIbis[it].intervalMs.toDouble() }.sorted()
+            val med = if (w.size % 2 == 1) w[w.size / 2] else (w[w.size / 2 - 1] + w[w.size / 2]) / 2
+            if (med > 0 && kotlin.math.abs(bandIbis[i].intervalMs - med) > 0.20 * med) {
+                ectopicFlags[i] = true
+            }
+        }
+        val cleanIbis = bandIbis.filterIndexed { i, _ -> !ectopicFlags[i] }
+
+        // Instantaneous HR from each beat's own interval.
+        val hrValues = cleanIbis.map { 60_000.0 / it.intervalMs }
+        val avgHr = if (hrValues.isEmpty()) null
+        else hrValues.sum() / hrValues.size // interval-weighted mean HR
+        val minHr = hrValues.minOrNull()   // slowest beat
+        val maxHr = hrValues.maxOrNull()   // fastest beat
 
         return SleepSummary(
             tibMin = round1(tibMin),
@@ -105,7 +135,27 @@ object SummaryCalculator {
             remPct = pctOfTst(stageCount[SleepStages.REM], tstMin),
             lowestRhrBpm = lowestRhr(cleanIbis)?.let { round1(it) },
             meanRmssdMs = rmssd(cleanIbis)?.let { round1(it) },
+            minHrBpm = minHr?.let { round1(it) },
+            maxHrBpm = maxHr?.let { round1(it) },
+            avgHrBpm = avgHr?.let { round1(it) },
+            avgSdnnMs = sdnn(cleanIbis)?.let { round1(it) },
         )
+    }
+
+    /**
+     * Night SDNN in ms: standard deviation of NN intervals over the whole
+     * timestamp-ordered series (classic time-domain HRV), or null if too few.
+     */
+    fun sdnn(ibis: List<IbiPoint>): Double? {
+        if (ibis.size < MIN_IBIS_FOR_RMSSD) return null
+        val n = ibis.size
+        val mean = ibis.sumOf { it.intervalMs }.toDouble() / n
+        var ss = 0.0
+        for (b in ibis) {
+            val d = b.intervalMs - mean
+            ss += d * d
+        }
+        return sqrt(ss / (n - 1))
     }
 
     /** rMSSD in ms over timestamp-ordered IBIs, or null if fewer than 3 samples. */
