@@ -1,0 +1,23 @@
+{
+  "engineId": "sploot-ibi-cnn",
+  "inputName": "ibi",
+  "outputName": "probs",
+  "fs": 2.0,
+  "samplesPerEpoch": 60,
+  "classes": [
+    "wake",
+    "light",
+    "deep",
+    "rem"
+  ],
+  "testKappa": 0.47277541450203586,
+  "testAccuracy": 0.6409513255476942,
+  "trainedOn": "HMC 86 nights",
+  "preprocess": {
+    "minIbi": 300.0,
+    "maxIbi": 2000.0,
+    "gapSeconds": 5.0,
+    "ectopicDeviation": 0.2,
+    "medianWindow": 5
+  }
+}

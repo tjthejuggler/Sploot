@@ -121,6 +121,12 @@ class RecoveryRepository(private val dao: DailyBaselineDao) {
      * @param sleepScore optional already-computed sleep-quality score to store.
      * @return the stored row, or null if no baseline history exists yet.
      */
+    suspend fun baselineByDate(date: LocalDate): DailyBaselineEntity? = dao.byDate(date.toString())
+
+    suspend fun allBaselines(): List<DailyBaselineEntity> = dao.all()
+
+    suspend fun deleteBaseline(date: LocalDate): Unit = dao.delete(date = date.toString())
+
     suspend fun computeMorningScore(
         date: LocalDate,
         sleepScore: Int? = null,

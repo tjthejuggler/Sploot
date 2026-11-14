@@ -1,6 +1,19 @@
 package com.example.sploot.ui.screens
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
+import com.example.sploot.R
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.ui.draw.alpha
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -8,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -28,15 +42,19 @@ import com.example.sploot.data.db.SleepStages
 import com.example.sploot.data.repo.IbiPoint
 import com.example.sploot.data.repo.SleepSummary
 import com.example.sploot.di.AppContainer
+import com.example.sploot.SleepDates
 import com.example.sploot.ui.components.HypnogramChart
 import com.example.sploot.ui.components.NightCard
+import com.example.sploot.ui.components.QuietMetric
+import com.example.sploot.ui.components.ScoreRing
 import com.example.sploot.ui.components.SectionTitle
 import com.example.sploot.ui.components.SimpleLineChart
+import com.example.sploot.ui.components.StageDurationGrid
 import com.example.sploot.ui.components.StageLegend
-import com.example.sploot.ui.components.StageProportionBar
 import com.example.sploot.ui.components.formatEpochClock
 import com.example.sploot.ui.theme.HrCurve
 import com.example.sploot.ui.theme.RmssdCurve
+import com.example.sploot.ui.theme.stageColor
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -64,8 +82,22 @@ class NightDetailViewModel(private val container: AppContainer) : ViewModel() {
         val lowestHr: Double? = null,
     )
 
-    private val _ui = MutableStateFlow(Ui())
-    val ui = _ui.asStateFlow()
+    /** Per-session UI state so pager pages can load without clobbering each other. */
+    private val _uis = MutableStateFlow<Map<String, Ui>>(emptyMap())
+    val uis = _uis.asStateFlow()
+
+    /** All stored nights (newest first) — the day-swipe pager order. */
+    private val _nightIds = MutableStateFlow<List<String>>(emptyList())
+    val nightIds = _nightIds.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            _nightIds.value = container.sessionRepo.sessions()
+                .filter { it.endEpochMs != null }
+                .sortedByDescending { it.startEpochMs }
+                .map { it.id }
+        }
+    }
 
     fun load(sessionId: String) {
         viewModelScope.launch {
@@ -95,7 +127,7 @@ class NightDetailViewModel(private val container: AppContainer) : ViewModel() {
             // rolling 5-min rMSSD
             val rmssdPoints = rollingRmssd(ibis, start, stageRows.size * epochMs)
 
-            _ui.value = Ui(
+            _uis.value = _uis.value + (sessionId to Ui(
                 sessionId = sessionId,
                 startMs = start,
                 endMs = session.endEpochMs,
@@ -105,7 +137,7 @@ class NightDetailViewModel(private val container: AppContainer) : ViewModel() {
                 rmssdPoints = rmssdPoints,
                 avgHr = hrPoints.map { it.second }.average().takeIf { hrPoints.isNotEmpty() },
                 lowestHr = hrPoints.minByOrNull { it.second }?.second?.toDouble(),
-            )
+            ))
         }
     }
 
@@ -170,42 +202,110 @@ class NightDetailViewModel(private val container: AppContainer) : ViewModel() {
 private val dayFmt = SimpleDateFormat("EEEE, MMMM d", Locale.getDefault())
 
 @Composable
-fun NightDetailScreen(viewModel: NightDetailViewModel, sessionId: String) {
-    val ui by viewModel.ui.collectAsState()
-    LaunchedEffect(sessionId) { viewModel.load(sessionId) }
+fun NightDetailScreen(
+    viewModel: NightDetailViewModel,
+    sessionId: String,
+) {
+    // Day swiping: page horizontally through every stored night, newest first.
+    val nightIds by viewModel.nightIds.collectAsState()
+    val initialPage = nightIds.indexOf(sessionId)
+    if (nightIds.isEmpty() || initialPage < 0) {
+        NightDetailPage(viewModel, sessionId)
+        return
+    }
+    val pagerState = rememberPagerState(initialPage = initialPage) { nightIds.size }
+    HorizontalPager(
+        state = pagerState,
+        modifier = Modifier.fillMaxSize(),
+        key = { nightIds[it] },
+    ) { page ->
+        NightDetailPage(viewModel, nightIds[page])
+    }
+}
+
+@Composable
+private fun NightDetailPage(viewModel: NightDetailViewModel, pageId: String) {
+    val all by viewModel.uis.collectAsState()
+    val ui = all[pageId] ?: NightDetailViewModel.Ui(sessionId = pageId)
+    LaunchedEffect(pageId) { viewModel.load(pageId) }
     var scrub by remember { mutableStateOf<String?>(null) }
 
-    LazyColumn(
-        Modifier
-            .fillMaxSize()
-            .padding(horizontal = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp),
-    ) {
-        item { Spacer(Modifier.height(4.dp)) }
+    val listState = rememberLazyListState()
 
-        // Header: date + time range
+    // Multi-layer parallax: dreamy mist and a faint koala drift slower than
+    // the content as the night scrolls by — subtle, never loud.
+    Box(Modifier.fillMaxSize()) {
+        val parallax = listState.firstVisibleItemIndex * 800 + listState.firstVisibleItemScrollOffset
+        Image(
+            painter = painterResource(R.drawable.img_mist),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(420.dp)
+                .graphicsLayer { translationY = -parallax * 0.22f }
+                .alpha(0.06f),
+        )
+        Image(
+            painter = painterResource(R.drawable.img_koala_ghost),
+            contentDescription = null,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(560.dp)
+                .graphicsLayer { translationY = 120f - parallax * 0.40f }
+                .alpha(0.05f),
+        )
+        LazyColumn(
+            Modifier
+                .fillMaxSize()
+                .padding(horizontal = 20.dp),
+            state = listState,
+            verticalArrangement = Arrangement.spacedBy(18.dp),
+        ) {
+        item { Spacer(Modifier.height(10.dp)) }
+
+        // Header: wake-date title (sleep2 convention) + time range + duration
         item {
-            Column {
-                Text(
-                    dayFmt.format(Date(ui.startMs)),
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold,
-                )
-                Text(
-                    "${fmtHm(ui.startMs)} - ${fmtHm(ui.endMs ?: ui.startMs)}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp), modifier = Modifier.weight(1f)) {
+                    Text(
+                        SleepDates.nightDate(ui.startMs, ui.endMs).let { dayFmt.format(Date.from(it.atStartOfDay(java.time.ZoneId.systemDefault()).toInstant())) },
+                        style = MaterialTheme.typography.displaySmall,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    val dur = ui.summary?.let { " · ${fmtDur(it.tibMin)} in bed" } ?: ""
+                    Text(
+                        "${fmtHm(ui.startMs)} – ${fmtHm(ui.endMs ?: ui.startMs)}$dur",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
 
-        // Top metrics row (asleep / efficiency / lowest rhr)
+        // Hero on the page background: efficiency ring + key stats (sleep2-style)
         item {
-            Row(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
-                ui.summary?.let { s ->
-                    Metric("asleep", fmtDur(s.tstMin))
-                    Metric("efficiency", "${s.sleepEfficiencyPct.toInt()}%")
-                    s.lowestRhrBpm?.let { Metric("lowest rhr", "${it.toInt()} bpm") }
+            ui.summary?.let { s ->
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 6.dp),
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(24.dp),
+                ) {
+                    ScoreRing(
+                        score = s.sleepEfficiencyPct.toInt(),
+                        label = "efficiency",
+                        modifier = Modifier.size(124.dp),
+                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Metric("asleep", fmtDur(s.tstMin))
+                        s.lowestRhrBpm?.let { Metric("lowest rhr", "${it.toInt()} bpm") }
+                        s.meanRmssdMs?.let { Metric("rmssd", "${it.toInt()} ms") }
+                    }
                 }
             }
         }
@@ -214,14 +314,20 @@ fun NightDetailScreen(viewModel: NightDetailViewModel, sessionId: String) {
         if (ui.stages.isNotEmpty()) {
             item {
                 NightCard(Modifier.fillMaxWidth()) {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        SectionTitle("Sleep phases")
+                    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                        ) {
+                            SectionTitle("Sleep phases")
+                            scrub?.let {
+                                Text(it, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
                         StageLegend()
                         val epochStartMs = remember(ui.stages.size) {
                             List(ui.stages.size) { i -> ui.startMs + i * 30_000L }
-                        }
-                        scrub?.let {
-                            Text(it, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.tertiary)
                         }
                         HypnogramChart(
                             stages = ui.stages,
@@ -231,7 +337,7 @@ fun NightDetailScreen(viewModel: NightDetailViewModel, sessionId: String) {
                             },
                         )
                         ui.summary?.let {
-                            StageProportionBar(
+                            StageDurationGrid(
                                 lightMin = it.lightMin,
                                 deepMin = it.deepMin,
                                 remMin = it.remMin,
@@ -242,27 +348,13 @@ fun NightDetailScreen(viewModel: NightDetailViewModel, sessionId: String) {
                 }
             }
 
-            // Stage duration tiles (Deep / REM / Light / Awake)
-            item {
-                ui.summary?.let { s ->
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                        StageTile("Deep", s.deepMin, s.deepPct, Modifier.weight(1f))
-                        StageTile("REM", s.remMin, s.remPct, Modifier.weight(1f))
-                    }
-                    Spacer(Modifier.height(10.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                        StageTile("Light", s.lightMin, s.lightPct, Modifier.weight(1f))
-                        StageTile("Awake", s.wakeMin, s.wakePct, Modifier.weight(1f))
-                    }
-                }
-            }
         }
 
         // ---- Heart rate card ----
         if (ui.hrPoints.isNotEmpty()) {
             item {
                 NightCard(Modifier.fillMaxWidth()) {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         SectionTitle("Heart rate")
                         // Prefer interval-derived stats from the summary (exact,
                         // interval-weighted); fall back to the plotted curve.
@@ -270,13 +362,17 @@ fun NightDetailScreen(viewModel: NightDetailViewModel, sessionId: String) {
                         val avg = s?.avgHrBpm ?: ui.avgHr
                         val minHr = s?.minHrBpm ?: ui.hrPoints.minByOrNull { it.second }?.second?.toDouble()
                         val maxHr = s?.maxHrBpm ?: ui.hrPoints.maxByOrNull { it.second }?.second?.toDouble()
-                        MetricRow("Average", "${avg?.toInt() ?: "--"} bpm")
-                        MetricRow("Lowest", "${minHr?.toInt() ?: "--"} bpm")
-                        MetricRow("Highest", "${maxHr?.toInt() ?: "--"} bpm")
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            PanelMetric("average", "${avg?.toInt() ?: "--"} bpm", Modifier.weight(1f))
+                            PanelMetric("lowest", "${minHr?.toInt() ?: "--"} bpm", Modifier.weight(1f))
+                            PanelMetric("highest", "${maxHr?.toInt() ?: "--"} bpm", Modifier.weight(1f))
+                        }
                         SimpleLineChart(
                             ui.hrPoints,
                             lineColor = HrCurve,
                             minMaxLabel = { "%.0f".format(it) },
+                            fillCurve = true,
+                            smooth = true,
                         )
                     }
                 }
@@ -287,16 +383,21 @@ fun NightDetailScreen(viewModel: NightDetailViewModel, sessionId: String) {
         if (ui.rmssdPoints.isNotEmpty()) {
             item {
                 NightCard(Modifier.fillMaxWidth()) {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        SectionTitle("HRV (rMSSD, 5 min)")
-                        Text(
-                            "Night rMSSD:  ${ui.summary?.meanRmssdMs?.toInt() ?: "--"} ms",
-                            style = MaterialTheme.typography.bodyLarge,
-                        )
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        SectionTitle("Heart rate variability")
+                        ui.summary?.let { s ->
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                PanelMetric("rmssd", "${s.meanRmssdMs?.toInt() ?: "--"} ms", Modifier.weight(1f))
+                                s.avgSdnnMs?.let { PanelMetric("sdnn", "$it ms", Modifier.weight(1f)) }
+                            }
+                        }
                         SimpleLineChart(
                             ui.rmssdPoints,
                             lineColor = RmssdCurve,
                             minMaxLabel = { "%.0f".format(it) },
+                            fillCurve = true,
+                            smooth = true,
+                            showMean = false,
                         )
                     }
                 }
@@ -309,6 +410,8 @@ fun NightDetailScreen(viewModel: NightDetailViewModel, sessionId: String) {
                 NightCard(Modifier.fillMaxWidth()) {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         SectionTitle("Sleep metrics")
+                        MetricRow("Bedtime", fmtHm(ui.startMs))
+                        MetricRow("Woke up", fmtHm(ui.endMs ?: ui.startMs))
                         MetricRow("Time in bed", fmtDur(s.tibMin))
                         MetricRow("Asleep", fmtDur(s.tstMin))
                         MetricRow("Fell asleep in", fmtDur(s.solMin))
@@ -322,6 +425,7 @@ fun NightDetailScreen(viewModel: NightDetailViewModel, sessionId: String) {
         }
 
         item { Spacer(Modifier.height(56.dp)) }
+        }
     }
 }
 
@@ -333,22 +437,38 @@ private fun Metric(label: String, value: String) {
     }
 }
 
+/** Sleep2-style inset panel metric: value raised on a lighter rounded panel. */
 @Composable
-private fun MetricRow(label: String, value: String) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+private fun PanelMetric(label: String, value: String, modifier: Modifier = Modifier) {
+    Column(
+        modifier
+            .clip(RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(1.dp),
+    ) {
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(value, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Medium)
     }
 }
 
 @Composable
-private fun StageTile(label: String, minutes: Double, pct: Double, modifier: Modifier = Modifier) {
-    NightCard(modifier) {
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(fmtDur(minutes), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            Text("${pct.toInt()}%", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+private fun MetricRow(label: String, value: String) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+    ) {
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            value,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier
+                .clip(RoundedCornerShape(10.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                .padding(horizontal = 10.dp, vertical = 3.dp),
+        )
     }
 }
 

@@ -28,17 +28,29 @@ class ModelLoaderTest {
 
     private fun writeModel(dir: File, engineId: String, json: String) {
         // Copy the placeholder .onnx bytes as the "model"; only metadata varies here.
-        val src = File(assetsModelsDir(), "sploot-${if (engineId == EngineRegistry.SEQ) "seq" else "gbdt"}.onnx")
+        val src = File(
+            assetsModelsDir(),
+            "sploot-${if (engineId == EngineRegistry.IBI) "ibi-cnn" else if (engineId == EngineRegistry.SEQ) "seq" else "gbdt"}.onnx",
+        )
         File(dir, "$engineId.onnx").writeBytes(src.readBytes())
         File(dir, "$engineId.json").writeText(json)
     }
 
     @Test
-    fun `bundled placeholder models load and validate`() {
+    fun `bundled models load and validate`() {
         val loader = ModelLoader.forDirectory(assetsModelsDir())
         val models = loader.loadAll()
-        assertEquals(setOf(EngineRegistry.SEQ, EngineRegistry.GBDT), models.keys)
+        assertEquals(setOf(EngineRegistry.IBI, EngineRegistry.SEQ, EngineRegistry.GBDT), models.keys)
         models.values.forEach { assertTrue(it.bytes.size > 100) }
+    }
+
+    @Test
+    fun `ibi model metadata carries wake bias and skips feature contract`() {
+        val loader = ModelLoader.forDirectory(assetsModelsDir())
+        val meta = loader.load(EngineRegistry.IBI).metadata
+        assertEquals(EngineRegistry.IBI, meta.engineId)
+        assertEquals(1.25f, meta.wakeBias)
+        meta.validateFeatureContract() // raw-IBI model: no 127-feature contract, must not throw
     }
 
     @Test

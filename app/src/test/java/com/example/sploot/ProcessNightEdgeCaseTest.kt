@@ -60,6 +60,9 @@ private class FakeStageDao : StageDao {
     override suspend fun insertAll(rows: List<StageEntity>) { this.rows += rows }
     override suspend fun forSession(sessionId: String): List<StageEntity> =
         rows.filter { it.sessionId == sessionId }.sortedBy { it.epochIndex }
+    override suspend fun deleteForSession(sessionId: String) {
+        rows.removeAll { it.sessionId == sessionId }
+    }
 }
 
 private class FakeRawIntervalDao : RawIntervalDao {

@@ -21,3 +21,6 @@ __pycache__/
 
 # build artifacts anywhere
 build/
+
+# scratch
+.tmp/

@@ -21,6 +21,7 @@ import com.example.sploot.ml.EngineRegistry
 import com.example.sploot.ml.ModelLoader
 import com.example.sploot.ml.SleepStagingEngine
 import com.example.sploot.processing.ProcessNightUseCase
+import com.example.sploot.processing.RestageAllUseCase
 import com.example.sploot.recording.SessionManager
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
@@ -83,6 +84,13 @@ class AppContainer(val context: Context) {
         assets = { name -> runCatching { context.assets.open(name) }.getOrNull() },
     )
 
+    /** Re-stages every stored night with the current engine (Settings action). */
+    val restageAll = RestageAllUseCase(
+        repo = sessionRepo,
+        recoveryRepo = recoveryRepo,
+        engineProvider = { engine() },
+    )
+
     // ---- automated btsnoop capture (Phase 12) ----
     val snoopCaptureStore = SnoopCaptureStore(context)
     val snoopAutoFetcher = SnoopAutoFetcher(
@@ -105,18 +113,18 @@ class AppContainer(val context: Context) {
     fun sessionsRoot(): File = File(context.filesDir, "sessions")
 }
 
-/** Engine selection persisted in DataStore ("sploot-seq" default). */
+/** Engine selection persisted in DataStore ("sploot-ibi-cnn" default). */
 class SettingsStore(private val context: Context) {
 
     private val key = stringPreferencesKey("staging_engine")
 
     val engineId: Flow<String> = context.settingsPrefs.data.map {
-        // Default to the heuristic engine until trained ONNX models ship
-        // (the bundled sploot-seq/gbdt files are placeholders).
-        it[key] ?: EngineRegistry.HEURISTIC
+        // Default to the raw-IBI network (validated vs sleep² at κ 0.736).
+        // A stored legacy value (heuristic/seq/gbdt) still wins until changed.
+        it[key] ?: EngineRegistry.IBI
     }
 
-    @Volatile var cachedEngineId: String = EngineRegistry.HEURISTIC
+    @Volatile var cachedEngineId: String = EngineRegistry.IBI
         private set
 
     suspend fun warmCache() {

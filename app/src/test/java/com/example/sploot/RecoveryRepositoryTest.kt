@@ -21,6 +21,7 @@ class RecoveryRepositoryTest {
         override suspend fun range(fromDate: String, toDate: String): List<DailyBaselineEntity> =
             rows.keys.sorted().filter { it in fromDate..toDate }.map { rows.getValue(it) }
         override suspend fun all(): List<DailyBaselineEntity> = rows.values.sortedBy { it.date }
+        override suspend fun delete(date: String) { rows.remove(date) }
     }
 
     @Test

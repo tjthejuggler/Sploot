@@ -38,12 +38,6 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.sploot.di.AppContainer
-import com.example.sploot.ui.screens.ABCompareScreen
-import com.example.sploot.ui.screens.ABCompareViewModel
-import com.example.sploot.ui.screens.DashboardScreen
-import com.example.sploot.ui.screens.DashboardViewModel
-import com.example.sploot.ui.screens.DiaryScreen
-import com.example.sploot.ui.screens.DiaryViewModel
 import com.example.sploot.ui.screens.ExportScreen
 import com.example.sploot.ui.screens.ExportViewModel
 import com.example.sploot.ui.screens.HomeScreen
@@ -75,9 +69,7 @@ class MainActivity : ComponentActivity() {
 private data class TopDestination(val route: String, val label: String, val iconRes: Int)
 
 private val destinations = listOf(
-    TopDestination("home", "record", com.example.sploot.R.drawable.ic_nav_record),
-    TopDestination("diary", "diary", com.example.sploot.R.drawable.ic_nav_diary),
-    TopDestination("dashboard", "report", com.example.sploot.R.drawable.ic_nav_report),
+    TopDestination("home", "home", com.example.sploot.R.drawable.ic_nav_diary),
     TopDestination("trends", "trends", com.example.sploot.R.drawable.ic_nav_trends),
     TopDestination("settings", "settings", com.example.sploot.R.drawable.ic_nav_settings),
 )
@@ -158,13 +150,6 @@ fun SplootApp(container: AppContainer) {
                     viewModel = vm,
                     onProcessRecorded = { sid -> nav.navigate("processing/$sid") },
                     onProcessSnoop = { sid, uri -> nav.navigate("processing/$sid?snoopUri=$uri") },
-                )
-            }
-
-            composable("diary") {
-                val vm: DiaryViewModel = viewModel(factory = DiaryViewModel.factory(container))
-                DiaryScreen(
-                    viewModel = vm,
                     onOpenNight = { sid -> nav.navigate("night/$sid") },
                 )
             }
@@ -175,7 +160,10 @@ fun SplootApp(container: AppContainer) {
             ) { entry ->
                 val sid = entry.arguments?.getString("sessionId") ?: return@composable
                 val vm: NightDetailViewModel = viewModel(factory = NightDetailViewModel.factory(container))
-                NightDetailScreen(viewModel = vm, sessionId = sid)
+                NightDetailScreen(
+                    viewModel = vm,
+                    sessionId = sid,
+                )
             }
 
             composable(
@@ -197,43 +185,16 @@ fun SplootApp(container: AppContainer) {
                     snoopUri = snoop,
                     viewModel = vm,
                     onDone = { doneId ->
-                        nav.navigate("dashboard?sessionId=$doneId") {
+                        nav.navigate("night/$doneId") {
                             popUpTo("home")
                         }
                     },
                 )
             }
 
-            composable(
-                route = "dashboard?sessionId={sessionId}",
-                arguments = listOf(
-                    androidx.navigation.navArgument("sessionId") {
-                        defaultValue = ""
-                        androidx.navigation.NavType.StringType
-                    },
-                ),
-            ) { entry ->
-                val sid = entry.arguments?.getString("sessionId")?.takeIf { it.isNotBlank() }
-                val vm: DashboardViewModel = viewModel(factory = DashboardViewModel.factory(container))
-                DashboardScreen(
-                    viewModel = vm,
-                    initialSessionId = sid,
-                    onCompare = { id -> nav.navigate("compare/$id") },
-                )
-            }
-
             composable("trends") {
                 val vm: TrendsViewModel = viewModel(factory = TrendsViewModel.factory(container))
                 TrendsScreen(vm)
-            }
-
-            composable(
-                route = "compare/{sessionId}",
-                arguments = listOf(androidx.navigation.navArgument("sessionId") { }),
-            ) { entry ->
-                val sid = entry.arguments?.getString("sessionId") ?: return@composable
-                val vm: ABCompareViewModel = viewModel(factory = ABCompareViewModel.factory(container))
-                ABCompareScreen(sessionId = sid, viewModel = vm)
             }
 
             composable("export") {

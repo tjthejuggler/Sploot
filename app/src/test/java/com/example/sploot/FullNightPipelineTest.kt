@@ -136,7 +136,9 @@ class FullNightPipelineTest {
 
         val loader = ModelLoader.forDirectory(assetsModelsDir())
 
-        for (engineId in EngineRegistry.ALL) {
+        // sploot-ibi-cnn consumes raw IBI, not the feature contract — its
+        // pipeline is covered by OnnxIbiEngineTest.
+        for (engineId in EngineRegistry.ALL.filter { it != EngineRegistry.IBI }) {
             val engine = EngineRegistry.create(
                 engineId,
                 if (engineId in EngineRegistry.MODEL_BASED) loader.load(engineId) else null,

@@ -45,6 +45,9 @@ interface StageDao {
 
     @Query("SELECT * FROM stages WHERE sessionId = :sessionId ORDER BY epochIndex")
     suspend fun forSession(sessionId: String): List<StageEntity>
+
+    @Query("DELETE FROM stages WHERE sessionId = :sessionId")
+    suspend fun deleteForSession(sessionId: String)
 }
 
 @Dao
@@ -78,6 +81,9 @@ interface DailyBaselineDao {
 
     @Query("SELECT * FROM daily_baselines WHERE date = :date")
     suspend fun byDate(date: String): DailyBaselineEntity?
+
+    @Query("DELETE FROM daily_baselines WHERE date = :date")
+    suspend fun delete(date: String)
 
     /** Inclusive range query ordered chronologically. */
     @Query(

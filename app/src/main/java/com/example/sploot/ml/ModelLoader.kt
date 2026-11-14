@@ -14,10 +14,19 @@ data class ModelMetadata(
     /**
      * Feature contract: either an integer feature-list version (compared against
      * [FeatureVectorBuilder.FEATURE_VERSION]) or an explicit `featureNames` list
-     * (compared element-wise against FEATURE_NAMES).
+     * (compared element-wise against FEATURE_NAMES). Raw-IBI engines
+     * ([EngineRegistry.IBI]) carry neither — they consume the interval series
+     * via [IbiSequencePreprocessor], not the 127-feature contract.
      */
     val featureVersion: Int? = null,
     val featureNames: List<String>? = null,
+    /**
+     * Constant added to the Wake logit before renormalisation (raw-IBI engine
+     * only). 1.25 for the shipped model — fitted on the user's 209-night
+     * sleep² history and confirmed optimal against digitised sleep²
+     * hypnograms (κ 0.736 over 7 nights).
+     */
+    val wakeBias: Float = 0f,
     /** True when the model emits raw logits (softmax applied on-device). */
     val logits: Boolean = false,
     /** Optional tensor-name overrides (defaults: first session input/output). */
@@ -25,14 +34,15 @@ data class ModelMetadata(
     val outputName: String? = null,
 ) {
     init {
-        require(featureVersion != null || featureNames != null) {
+        require(featureVersion != null || featureNames != null || engineId == EngineRegistry.IBI) {
             "metadata must carry either featureVersion or featureNames"
         }
         require(engineId.isNotBlank()) { "engineId must not be blank" }
     }
 
-    /** Throws [IllegalArgumentException] when the model's contract != FEATURE_NAMES. */
+    /** Throws [IllegalArgumentException] when the model's contract != FEATURE_NAMES. Raw-IBI models are exempt. */
     fun validateFeatureContract() {
+        if (engineId == EngineRegistry.IBI) return
         featureNames?.let { names ->
             require(names == FeatureVectorBuilder.FEATURE_NAMES) {
                 "model feature list (${names.size} features) does not match app contract " +

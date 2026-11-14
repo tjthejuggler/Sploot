@@ -99,13 +99,12 @@ class MorningCaptureCoordinator(
 
         if (!store.isAutoEnabled()) return
 
-        // 2. Fallback: the passive btsnoop pipeline (needs Shizuku).
+        // 2. Fallback: the passive btsnoop pipeline (needs a privileged shell).
         val unavailable = fetcher.availability
         if (unavailable != null) {
-            if (processCachedCapture("cached btsnoop capture (Shizuku unavailable)")) return
+            if (processCachedCapture("cached btsnoop capture")) return
             _status.value = Status.Failed(
-                "${unavailable.reason}. sploot only needs shizuku at this moment — " +
-                    "start it, then tap “capture last night”.",
+                "couldn't read the stored nights — connect the sensor and tap “try again”",
             )
             return
         }
@@ -134,7 +133,7 @@ class MorningCaptureCoordinator(
             deviceRepo.setLastKnownDevice(found.deviceId, found.name)
             found.deviceId
         }
-        val deviceLabel = deviceRepo.lastKnownDeviceName.value ?: deviceId
+        val deviceLabel = deviceRepo.lastKnownDeviceName.value ?: "Polar Verity Sense"
         _status.value = Status.Running("checking $deviceLabel for new nights")
         // Auto-connect: the morning flow must work without the user opening
         // the Record tab first. Bounded wait keeps app-open snappy when the
@@ -365,8 +364,7 @@ class MorningCaptureCoordinator(
         val success = when (result) {
             is SnoopAutoFetcher.Result.Unavailable ->
                 return CaptureResult.Failed(
-                    result.reason + " — sploot only needs shizuku at this moment. " +
-                        "start it, then tap “capture last night”.",
+                    "couldn't read the stored nights — connect the sensor and tap “try again”",
                 )
             is SnoopAutoFetcher.Result.Failure ->
                 return CaptureResult.Failed(result.reason)

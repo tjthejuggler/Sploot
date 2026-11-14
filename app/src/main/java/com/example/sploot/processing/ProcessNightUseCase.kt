@@ -221,8 +221,16 @@ class ProcessNightUseCase(
             val allFeaturesInvalid = epochs.all { !it.hrvValid && !it.accValid }
 
             onProgress(ProcessingState.Running("staging (${epochs.size} epochs)", 0.55f))
-            val pipeline = StagingPipeline.create(engineProvider(), assets)
-            val result = pipeline.stageNight(
+            val engine = engineProvider()
+            // Preferred path: raw-IBI network (sleep²-style) staging straight
+            // from the interval series; falls back to the feature-based
+            // pipeline (heuristic / placeholder models) when unsupported or
+            // when too few clean beats survive preprocessing.
+            val result = engine.stageRawIbi(
+                startMs,
+                ibis.map { it.timestampMs to it.intervalMs },
+                epochs.size,
+            ) ?: StagingPipeline.create(engine, assets).stageNight(
                 featureRows.map { ef -> FloatArray(ef.values.size) { ef.values[it].toFloat() } },
             )
 
@@ -274,7 +282,8 @@ class ProcessNightUseCase(
             )
 
             onProgress(ProcessingState.Running("summarising", 0.9f))
-            val date = Instant.ofEpochMilli(startMs).atZone(ZoneId.systemDefault()).toLocalDate()
+            // sleep² convention: the night is dated by its wake-up morning
+            val date = com.example.sploot.SleepDates.nightDate(startMs, epochs.last().endMs)
             recoveryRepo.computeMorningScore(date)
             val done = ProcessingState.Done(sessionId, summary)
             onProgress(done)

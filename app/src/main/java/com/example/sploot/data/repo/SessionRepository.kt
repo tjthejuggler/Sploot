@@ -97,6 +97,16 @@ open class SessionRepository(private val db: SplootDatabase) {
     suspend fun insertStages(rows: List<StageEntity>) =
         rows.chunked(STAGE_CHUNK).forEach { db.stageDao().insertAll(it) }
 
+    /**
+     * Atomically swaps a night's hypnogram (re-staging with a new engine);
+     * features and intervals are preserved. Summary recomputation is the
+     * caller's job (see [computeAndStoreSummary]).
+     */
+    suspend fun replaceStages(sessionId: String, stages: List<StageEntity>) = inTransaction {
+        db.stageDao().deleteForSession(sessionId)
+        stages.chunked(STAGE_CHUNK).forEach { db.stageDao().insertAll(it) }
+    }
+
     suspend fun insertIntervals(rows: List<RawIntervalEntity>) =
         rows.chunked(IBI_CHUNK).forEach { db.rawIntervalDao().insertAll(it) }
 
@@ -139,8 +149,7 @@ open class SessionRepository(private val db: SplootDatabase) {
         val scored = recs.map { s ->
             Score(
                 id = s.id,
-                date = java.time.Instant.ofEpochMilli(s.startEpochMs)
-                    .atZone(java.time.ZoneId.systemDefault()).toLocalDate().toString(),
+                date = com.example.sploot.SleepDates.nightDate(s.startEpochMs, s.endEpochMs).toString(),
                 stageRows = db.stageDao().forSession(s.id).size,
                 idScore = s.id,
             )
@@ -212,8 +221,8 @@ open class SessionRepository(private val db: SplootDatabase) {
     private suspend fun upsertBaselineFromSummary(session: SessionEntity, summary: SleepSummary) {
         val rmssd = summary.meanRmssdMs ?: return
         val rhr = summary.lowestRhrBpm ?: return
-        val date = Instant.ofEpochMilli(session.startEpochMs)
-            .atZone(ZoneId.systemDefault()).toLocalDate().toString()
+        // sleep² convention: the night belongs to its wake-up date (see SleepDates)
+        val date = com.example.sploot.SleepDates.nightDate(session.startEpochMs, session.endEpochMs).toString()
         val existing = db.dailyBaselineDao().byDate(date)
         db.dailyBaselineDao().upsert(
             (existing ?: DailyBaselineEntity(date, rmssd, rhr, null, null)).copy(

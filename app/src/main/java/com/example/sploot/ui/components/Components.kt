@@ -2,6 +2,7 @@ package com.example.sploot.ui.components
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -9,9 +10,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
@@ -85,7 +88,13 @@ fun NightCard(
         }
     } else {
         Card(
-            modifier = modifier,
+            modifier = modifier.border(
+                width = 1.dp,
+                brush = Brush.verticalGradient(
+                    listOf(sheen.copy(alpha = 0.55f), MaterialTheme.colorScheme.surface.copy(alpha = 0.15f)),
+                ),
+                shape = shape,
+            ),
             shape = shape,
             colors = CardDefaults.cardColors(containerColor = container),
             elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
@@ -218,7 +227,8 @@ fun HypnogramChart(
         Canvas(
             Modifier
                 .fillMaxWidth()
-                .height(170.dp)
+                .height(180.dp)
+                .clip(RoundedCornerShape(16.dp))
                 .pointerInput(stages.size) {
                     detectTapGestures { offset ->
                         selected = epochAt(offset.x, size.width.toFloat()).also { idx ->
@@ -255,10 +265,20 @@ fun HypnogramChart(
                 }
                 drawRect(
                     color = stageColor(stage),
-                    topLeft = Offset(i * slot, 4.dp.toPx() + y * bandH + 1.5f),
-                    size = Size(slot + 0.6f, bandH - 3f),
+                    topLeft = Offset(i * slot, 4.dp.toPx() + y * bandH + 2.5f),
+                    size = Size(slot + 0.6f, bandH - 5f),
                 )
             }
+
+            // gloss overlay across the top half — subtle shimmer
+            drawRect(
+                brush = Brush.verticalGradient(
+                    listOf(Color.White.copy(alpha = 0.05f), Color.Transparent),
+                    startY = 0f,
+                    endY = h * 0.55f,
+                ),
+                size = Size(w, h * 0.55f),
+            )
 
             // scrub line
             if (selected in stages.indices) {
@@ -300,6 +320,8 @@ fun SimpleLineChart(
     band: ClosedFloatingPointRange<Double>? = null,
     showMean: Boolean = true,
     meanLabel: ((Float) -> String)? = null,
+    fillCurve: Boolean = false,
+    smooth: Boolean = false,
 ) {
     Column(modifier) {
         val ys = points.map { it.second }
@@ -358,7 +380,41 @@ fun SimpleLineChart(
                 val x = fx * w
                 if (i == 0) path.moveTo(x, yOf(v)) else path.lineTo(x, yOf(v))
             }
-            drawPath(path, lineColor, style = Stroke(width = 2.5f, cap = StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round))
+            if (smooth && points.size > 2) {
+                // quadratic midpoint smoothing for soft sleep2-like curves
+                val smoothPath = Path()
+                val x0 = points.first().first * w
+                smoothPath.moveTo(x0, yOf(points.first().second))
+                for (i in 1 until points.size - 1) {
+                    val px = points[i].first * w
+                    val py = yOf(points[i].second)
+                    val nx = points[i + 1].first * w
+                    val ny = yOf(points[i + 1].second)
+                    smoothPath.quadraticBezierTo(px, py, (px + nx) / 2f, (py + ny) / 2f)
+                }
+                smoothPath.lineTo(points.last().first * w, yOf(points.last().second))
+                if (fillCurve) {
+                    val fill = Path().apply {
+                        addPath(smoothPath)
+                        lineTo(w, h)
+                        lineTo(0f, h)
+                        close()
+                    }
+                    drawPath(fill, Brush.verticalGradient(listOf(lineColor.copy(alpha = 0.30f), lineColor.copy(alpha = 0.02f))))
+                }
+                drawPath(smoothPath, lineColor, style = Stroke(width = 2.5f, cap = StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round))
+            } else {
+                if (fillCurve && points.isNotEmpty()) {
+                    val fill = Path().apply {
+                        addPath(path)
+                        lineTo(w, h)
+                        lineTo(0f, h)
+                        close()
+                    }
+                    drawPath(fill, Brush.verticalGradient(listOf(lineColor.copy(alpha = 0.30f), lineColor.copy(alpha = 0.02f))))
+                }
+                drawPath(path, lineColor, style = Stroke(width = 2.5f, cap = StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round))
+            }
 
             markerIndices.forEach { i ->
                 if (i in points.indices) {
@@ -396,6 +452,110 @@ fun StatCard(
             Text(value, style = MaterialTheme.typography.titleLarge, color = accent, fontWeight = FontWeight.SemiBold)
             if (subtitle != null) {
                 Text(subtitle, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+/**
+ * Circular recovery score ring (sleep2-style score visual): a rounded-cap
+ * progress arc on a quiet track with the score number centered inside.
+ */
+@Composable
+fun ScoreRing(
+    score: Int?,
+    modifier: Modifier = Modifier,
+    ringColor: Color = MaterialTheme.colorScheme.tertiary,
+    label: String = "recovery",
+) {
+    val track = MaterialTheme.colorScheme.surfaceContainerHighest
+    Box(modifier, contentAlignment = Alignment.Center) {
+        Canvas(Modifier.fillMaxSize()) {
+            val stroke = 10.dp.toPx()
+            val inset = stroke / 2 + 2.dp.toPx()
+            val arcSize = Size(size.width - inset * 2, size.height - inset * 2)
+            drawArc(
+                color = track,
+                startAngle = 0f,
+                sweepAngle = 360f,
+                useCenter = false,
+                topLeft = Offset(inset, inset),
+                size = arcSize,
+                style = Stroke(width = stroke, cap = StrokeCap.Round),
+            )
+            score?.let {
+                drawArc(
+                    color = ringColor,
+                    startAngle = -90f,
+                    sweepAngle = 360f * (it / 100f).coerceIn(0f, 1f),
+                    useCenter = false,
+                    topLeft = Offset(inset, inset),
+                    size = arcSize,
+                    style = Stroke(width = stroke, cap = StrokeCap.Round),
+                )
+            }
+        }
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                score?.toString() ?: "—",
+                style = MaterialTheme.typography.displayMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * Sleep2-style stage duration row: four columns (Awake / REM / Light / Deep),
+ * each with a colored dot, stage name, duration and share of the night.
+ */
+@Composable
+fun StageDurationGrid(
+    lightMin: Double,
+    deepMin: Double,
+    remMin: Double,
+    wakeMin: Double,
+    modifier: Modifier = Modifier,
+) {
+    val total = (lightMin + deepMin + remMin + wakeMin).takeIf { it > 0 } ?: return
+    val cells = listOf(
+        SleepStages.WAKE to wakeMin,
+        SleepStages.REM to remMin,
+        SleepStages.LIGHT to lightMin,
+        SleepStages.DEEP to deepMin,
+    )
+    Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        cells.forEach { (stage, min) ->
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier
+                            .size(8.dp)
+                            .background(stageColor(stage), RoundedCornerShape(4.dp)),
+                    )
+                    Text(
+                        "  ${SleepStages.name(stage).lowercase()}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Text(
+                    if (min >= 60) "${(min / 60).toInt()}h${"%02d".format((min % 60).toInt())}" else "${min.toInt()}m",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.Medium,
+                )
+                Text(
+                    "${(min / total * 100).toInt()}%",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }

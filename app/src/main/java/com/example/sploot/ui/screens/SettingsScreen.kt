@@ -36,7 +36,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.unit.dp
 import com.example.sploot.ble.snoop.SnoopAutoFetcher
 import com.example.sploot.ble.snoop.SnoopIngestSession
-import rikka.shizuku.Shizuku
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.ViewModel
@@ -59,8 +58,6 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
     data class Ui(
         val engineId: String = EngineRegistry.SEQ,
         val message: String? = null,
-        val shizukuAvailable: Boolean? = null, // null = not checked yet
-        val shizukuReason: String? = null,
         val autoEnabled: Boolean = true,
         val testBusy: Boolean = false,
         val testResult: String? = null,
@@ -120,16 +117,6 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
                 _ui.value = _ui.value.copy(autoEnabled = on)
             }
         }
-        refreshShizuku()
-    }
-
-    /** Re-checks Shizuku binder + permission state (safe to call anytime). */
-    fun refreshShizuku() {
-        val unavailable = container.snoopAutoFetcher.availability
-        _ui.value = _ui.value.copy(
-            shizukuAvailable = unavailable == null,
-            shizukuReason = unavailable?.reason,
-        )
     }
 
     fun setAutoEnabled(enabled: Boolean) {
@@ -202,6 +189,25 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
+    private val _restaging = MutableStateFlow(false)
+    val restaging = _restaging.asStateFlow()
+
+    /** Re-stages every stored night with the current engine's raw-IBI model. */
+    fun restageAllNights() {
+        if (_restaging.value) return
+        _restaging.value = true
+        viewModelScope.launch {
+            val outcome = try {
+                val o = container.restageAll.restageAll()
+                "Re-staged ${o.restaged} night(s)" + if (o.skipped > 0) ", skipped ${o.skipped}" else ""
+            } catch (e: Exception) {
+                "Re-staging failed: ${e.message ?: e.javaClass.simpleName}"
+            }
+            _restaging.value = false
+            _ui.value = _ui.value.copy(message = outcome)
+        }
+    }
+
     /** Installs `<id>.onnx` + `<id>.json` picked from local storage. */
     fun installModel(engineId: String, modelUri: Uri, metaUri: Uri) {
         viewModelScope.launch {
@@ -251,7 +257,7 @@ fun SettingsScreen(viewModel: SettingsViewModel, onOpenExport: () -> Unit = {}) 
         arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
     }
     val btLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
-        if (granted.values.all { it }) viewModel.scan() else viewModel.refreshShizuku()
+        if (granted.values.all { it }) viewModel.scan()
     }
 
     Column(
@@ -270,7 +276,7 @@ fun SettingsScreen(viewModel: SettingsViewModel, onOpenExport: () -> Unit = {}) 
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Staging engine", style = MaterialTheme.typography.titleMedium)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(EngineRegistry.SEQ, EngineRegistry.GBDT).forEach { id ->
+                    listOf(EngineRegistry.IBI, EngineRegistry.SEQ, EngineRegistry.GBDT).forEach { id ->
                         FilterChip(
                             selected = ui.engineId == id,
                             onClick = { viewModel.setEngine(id) },
@@ -278,6 +284,11 @@ fun SettingsScreen(viewModel: SettingsViewModel, onOpenExport: () -> Unit = {}) 
                         )
                     }
                 }
+                val restaging by viewModel.restaging.collectAsState()
+                Button(
+                    enabled = !restaging,
+                    onClick = { viewModel.restageAllNights() },
+                ) { Text(if (restaging) "Re-staging…" else "Re-stage all nights with current engine") }
                 Button(onClick = {
                     pendingEngine = ui.engineId
                     modelUri = null
@@ -330,7 +341,8 @@ fun SettingsScreen(viewModel: SettingsViewModel, onOpenExport: () -> Unit = {}) 
                 Text("About", style = MaterialTheme.typography.titleMedium)
                 Text(
                     "Sploot — autonomic sleep staging & recovery.\n" +
-                        "Bundles placeholder ONNX models (sploot-seq, sploot-gbdt); retrain via ml_pipeline/ " +
+                        "Default engine: sploot-ibi-cnn (raw-IBI network, validated vs sleep² at κ 0.74); " +
+                        "sploot-seq/gbdt are placeholders. Retrain via ml_pipeline/ " +
                         "and install replacements above. Licensed under the project license; Polar BLE SDK " +
                         "and ONNX Runtime are subject to their own licenses.",
                     style = MaterialTheme.typography.bodySmall,
@@ -345,65 +357,24 @@ fun SettingsScreen(viewModel: SettingsViewModel, onOpenExport: () -> Unit = {}) 
 }
 
 /**
- * "Automatic capture" section: Shizuku instructions + live status, the
- * auto-on-open toggle and the "Test fetch now" button with a full
- * bytes/packets/Polar-share report.
+ * "Automatic capture" section: the auto-on-open toggle and the
+ * "Test fetch now" button with a bytes/packets/Polar-share report.
  */
 @Composable
 private fun AutomaticCaptureCard(viewModel: SettingsViewModel) {
     val ui by viewModel.ui.collectAsState()
-    var permissionTick by remember { mutableStateOf(0) }
-
-    // Live Shizuku permission updates (also fires after our own request below).
-    DisposableEffect(Unit) {
-        val listener = Shizuku.OnRequestPermissionResultListener { _, _ ->
-            permissionTick++
-            viewModel.refreshShizuku()
-        }
-        Shizuku.addRequestPermissionResultListener(listener)
-        onDispose { Shizuku.removeRequestPermissionResultListener(listener) }
-    }
-    LaunchedEffect(permissionTick) { viewModel.refreshShizuku() }
 
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Automatic capture", style = MaterialTheme.typography.titleMedium)
 
             Text(
-                "One-time setup:\n" +
-                    "1. Install the Shizuku app and start it via wireless debugging " +
-                    "(Developer options → Wireless debugging → pair, then start).\n" +
-                    "2. Open Shizuku and grant Sploot permission.\n" +
-                    "Then every morning Sploot captures the overnight btsnoop log by itself — " +
-                    "no bug report, no cable.",
+                "Nights are pulled straight off the Polar Verity Sense whenever it " +
+                    "connects and today's night is missing. A manual log import stays " +
+                    "available as a fallback from the home screen.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-
-            val statusColor = when (ui.shizukuAvailable) {
-                true -> MaterialTheme.colorScheme.secondary
-                false -> MaterialTheme.colorScheme.error
-                null -> MaterialTheme.colorScheme.onSurfaceVariant
-            }
-            Text(
-                when {
-                    ui.shizukuAvailable == null -> "Checking Shizuku…"
-                    ui.shizukuAvailable == true -> "Shizuku: running · permission granted ✓"
-                    else -> "Shizuku: ${ui.shizukuReason ?: "unavailable"}"
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = statusColor,
-            )
-
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = {
-                    runCatching { Shizuku.requestPermission(1001) }
-                    viewModel.refreshShizuku()
-                }) { Text("Grant via Shizuku") }
-                if (ui.shizukuAvailable == false) {
-                    Button(onClick = { viewModel.refreshShizuku() }) { Text("Re-check") }
-                }
-            }
 
             Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                 Switch(
@@ -411,7 +382,7 @@ private fun AutomaticCaptureCard(viewModel: SettingsViewModel) {
                     onCheckedChange = { viewModel.setAutoEnabled(it) },
                 )
                 Text(
-                    "  Capture automatically when Sploot is opened",
+                    "  Capture automatically when the sensor connects",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -431,13 +402,6 @@ private fun AutomaticCaptureCard(viewModel: SettingsViewModel) {
                     else MaterialTheme.colorScheme.error,
                 )
             }
-
-            Text(
-                "Fallback chain: direct shell read → bugreportz → manual import " +
-                    "(Record tab → “Import btsnoop log”).",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
     }
 }
@@ -459,7 +423,7 @@ private fun SensorCard(
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             SectionTitle("Sensor")
             Text(
-                "Device: ${lastDevice ?: "none paired"}",
+                "Device: ${lastDevice?.let { POLAR_DEVICE_NAME } ?: "none paired"}",
                 style = MaterialTheme.typography.bodyMedium,
             )
             Text(

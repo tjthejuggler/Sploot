@@ -15,12 +15,28 @@ class SplootApplication : Application() {
         container = AppContainer(this)
         container.appScope.launch {
             runCatching { container.settingsStore.warmCache() }
+            // One-shot migration: re-stage nights still staged by the legacy
+            // heuristic engine with the raw-IBI network (2026-11-14). Skips
+            // silently when everything is already on the target engine.
+            runCatching {
+                if (container.restageAll.hasLegacyStagedNights(container.settingsStore.cachedEngineId)) {
+                    container.restageAll.restageAll()
+                }
+            }
             runCatching { container.deviceRepo.loadLastKnownDevice() }
-            // Phase 12: fully automatic morning flow — on app open, capture the
-            // overnight btsnoop log via Shizuku (if available) and, when it has
-            // changed since the last import, process it and post the morning
-            // summary notification. Silent no-op when disabled or unavailable.
-            runCatching { container.morningCapture.maybeAutoCapture() }
+            // Automatic morning flow — only when today's night is missing: if a
+            // session already exists with today's wake-up date there is nothing
+            // to fetch, so we don't even connect to the sensor.
+            val today = java.time.LocalDate.now().toString()
+            val hasTodayNight = runCatching {
+                container.sessionRepo.sessions().any {
+                    it.endEpochMs != null &&
+                        SleepDates.nightDate(it.startEpochMs, it.endEpochMs).toString() == today
+                }
+            }.getOrDefault(false)
+            if (!hasTodayNight) {
+                runCatching { container.morningCapture.maybeAutoCapture() }
+            }
         }
     }
 }

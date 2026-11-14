@@ -32,6 +32,19 @@ interface SleepStagingEngine {
     val engineId: String
 
     /**
+     * Optional raw-IBI staging path for engines that consume the inter-beat
+     * interval series directly (sleep²-style networks) instead of per-epoch
+     * feature vectors. Returns null when the engine does not support this
+     * input mode, or when the night has too little usable IBI — callers fall
+     * back to the feature-based [stage].
+     */
+    suspend fun stageRawIbi(
+        startMs: Long,
+        beats: List<Pair<Long, Int>>,
+        nEpochs: Int,
+    ): SleepStagingResult? = null
+
+    /**
      * @param features one [FloatArray] per epoch, each of length FEATURE_NAMES.size (127).
      * @return stages derived from argmax of the engine's probabilities plus the raw
      *   probability matrix; smoothing happens in [ViterbiSmoother], orchestrated by
@@ -42,6 +55,14 @@ interface SleepStagingEngine {
 
 /** Registry / factory selecting an engine implementation by its id. */
 object EngineRegistry {
+    /**
+     * Default: sleep²-style raw-IBI network (CNN + BiGRU) via ONNX Runtime.
+     * Trained on PhysioNet HMC + Challenge-2018 (1,106 nights); validated
+     * against the user's sleep² hypnograms at κ 0.736 over 7 nights
+     * (2026-11-14). Wake-calibrated (bias 1.25) from a 209-night sleep² dump.
+     */
+    const val IBI = "sploot-ibi-cnn"
+
     /** Whole-night sequence model (CNN + BiLSTM) via ONNX Runtime. */
     const val SEQ = "sploot-seq"
 
@@ -49,16 +70,17 @@ object EngineRegistry {
     const val GBDT = "sploot-gbdt"
 
     /**
-     * Physiologically-grounded heuristic stager. Default until trained ONNX
-     * models ship (the bundled sploot-seq/gbdt files are placeholders emitting
-     * a fixed class prior regardless of input — verified on-device 2026-11-02).
+     * Physiologically-grounded heuristic stager. Fallback when the IBI model
+     * cannot load or a night has too little usable IBI (the bundled
+     * sploot-seq/gbdt files are placeholders emitting a fixed class prior
+     * regardless of input — verified on-device 2026-11-02).
      */
     const val HEURISTIC = "sploot-heuristic"
 
-    val ALL = setOf(HEURISTIC, SEQ, GBDT)
+    val ALL = setOf(IBI, HEURISTIC, SEQ, GBDT)
 
     /** Engine ids that require a loadable ONNX model file. */
-    val MODEL_BASED = setOf(SEQ, GBDT)
+    val MODEL_BASED = setOf(IBI, SEQ, GBDT)
 
     /**
      * @throws IllegalArgumentException unknown engine id, or model metadata whose
@@ -67,6 +89,13 @@ object EngineRegistry {
     fun create(engineId: String, model: LoadedModel?): SleepStagingEngine =
         when (engineId) {
             HEURISTIC -> HeuristicStagingEngine()
+            IBI -> {
+                val m = requireNotNull(model) { "engine '$engineId' requires a loaded model" }
+                require(m.metadata.engineId == engineId) {
+                    "model metadata engineId '${m.metadata.engineId}' != requested '$engineId'"
+                }
+                OnnxIbiEngine(m)
+            }
             SEQ -> {
                 val m = requireNotNull(model) { "engine '$engineId' requires a loaded model" }
                 require(m.metadata.engineId == engineId) {

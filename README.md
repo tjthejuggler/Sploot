@@ -209,3 +209,9 @@ Taste-level pass. The koala retreats; its world steps forward.
 - Concurrent capture triggers (app-open auto capture, connect trigger,
   service, manual retry) are serialized with the coordinator mutex;
   overlapping callers no-op with a clear status instead of double-pulling.
+
+## 2026-11-14 — Raw-IBI staging engine (sploot-ibi-cnn) shipped as default
+- sleep²-style CNN+BiGRU on raw 2 Hz IBI (`assets/models/sploot-ibi-cnn.onnx`), trained on 1,106 PhysioNet nights (HMC + CinC Challenge-2018), wake-calibrated (bias 1.25).
+- Validated against sleep² hypnograms digitized from diary screenshots (7 nights): acc 81.7%, κ 0.736 (heuristic baseline: 31%, κ 0.03).
+- New: `IbiSequencePreprocessor` (parity golden test vs `ml_pipeline/ibi_seq.py`), `OnnxIbiEngine`, `SleepStagingEngine.stageRawIbi`, Settings default engine switch.
+- Deferred: fine-tune on the user's own PPI nights once more parallel Sploot+sleep² nights are collected.
