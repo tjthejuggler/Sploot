@@ -9,6 +9,7 @@ icon is the shape of a minimal koala head itself, on transparency.
 
 ```sh
 python3 sploot_icon_gen.py icon   # 2 koala-head candidates on PURE WHITE
+python3 sploot_icon_gen.py icon3d # 2 cute soft-3D mechanical koala-head candidates (preferred by build)
 python3 sploot_icon_gen.py mist   # misty eucalypt/moonlight wash (2:1)
 python3 sploot_icon_build.py      # key, tint, and install all assets
 ```

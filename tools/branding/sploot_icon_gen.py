@@ -13,6 +13,7 @@ small_scripts.
 
 Usage:
   python3 sploot_icon_gen.py icon       # koala-head silhouette art (1:1, 1k) x2 variants
+  python3 sploot_icon_gen.py icon3d     # cute soft-3D mechanical koala head (1:1, 1k) x2
   python3 sploot_icon_gen.py mist       # misty eucalypt/moonlight wash (2:1, 2k)
   python3 sploot_icon_gen.py all
 """
@@ -69,6 +70,52 @@ JOBS = {
                 "no gradient background, no border, no shadow, no text, no "
                 "letters. Very simple, very quiet, generous white margin. " +
                 PALETTE_CLAUSE
+            ),
+            "aspect_ratio": "1:1",
+            "resolution": "1k",
+        },
+    ],
+    "icon3d": [
+        {
+            "name": "sploot_icon3d_art",
+            "prompt": (
+                "A cute 3D-rendered app icon mascot: a koala HEAD only, "
+                "front-on, perfectly centered on a PURE WHITE (#FFFFFF) "
+                "background. Same classic koala head proportions — big round "
+                "fluffy ears, round gentle face — but rendered like a "
+                "premium collectible vinyl toy with a subtle soft-matte "
+                "mechanical robot feel: smooth ceramic-like matte surfaces, "
+                "soft panel seams along the ears and forehead, tiny rivet "
+                "dots at the ear rims, a small softly-glowing LED crescent "
+                "under one ear. Closed sleeping eyes as gentle downward "
+                "arcs, soft rounded charcoal nose, faint serene smile. Soft "
+                "diffuse studio lighting, gentle ambient occlusion, subtle "
+                "top-left key light, NO cast shadow on the background, no "
+                "floor, no scenery, no moon, no leaves, no text, no "
+                "letters, no numbers. Adorable, calm, huggable, "
+                "professional product-render quality, generous white "
+                "margin around the head. " + PALETTE_CLAUSE
+            ),
+            "aspect_ratio": "1:1",
+            "resolution": "1k",
+        },
+        {
+            "name": "sploot_icon3d_art",
+            "prompt": (
+                "Charming soft-3D koala head icon for a calm sleep app: a "
+                "single koala head, front-on, centered on COMPLETELY flat "
+                "pure white #FFFFFF with nothing else. Sculpted like a "
+                "gentle rounded robot-vinyl toy — plump round cheeks, two "
+                "big rounded ears with delicate matte mechanical panel "
+                "lines and a faint brushed-metal inner-ear accent, tiny "
+                "hexagonal seam detail on the forehead. Sweet closed "
+                "sleeping eyes (two calm arcs), soft oval charcoal nose, "
+                "very subtle contented smile. Pixar-adjacent cuteness but "
+                "quiet and dreamlike, desaturated pastel ceramic palette "
+                "with a faint moonlit rim light. Soft studio lighting, no "
+                "ground shadow, no reflections on the background, no "
+                "gradient background, no border, no text, no letters, no "
+                "numbers. Generous white margin. " + PALETTE_CLAUSE
             ),
             "aspect_ratio": "1:1",
             "resolution": "1k",

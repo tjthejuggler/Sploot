@@ -216,7 +216,8 @@ def build_mist():
 
 
 if __name__ == "__main__":
-    art = quietest("sploot_icon_art_*.png")
+    # prefer the soft-3D mechanical candidates when present; else legacy flat art
+    art = quietest("sploot_icon3d_art_*.png") or quietest("sploot_icon_art_*.png")
     print("keying", os.path.basename(art))
     head = crop_to_subject(key_white_to_alpha(Image.open(art)))
     build_launcher(head)
