@@ -23,6 +23,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import com.example.sploot.ui.dream.DreamFx
+import com.example.sploot.ui.dream.rememberDreamTime
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -152,13 +154,18 @@ fun QuietMetric(
 @Composable
 fun StageLegend(modifier: Modifier = Modifier, stages: List<Int> = listOf(0, 3, 1, 2)) {
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        val dreamT by rememberDreamTime()
         stages.forEach { s ->
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
                     Modifier
                         .height(10.dp)
                         .fillMaxWidth(0.022f)
-                        .background(stageColor(s), RoundedCornerShape(2.dp)),
+                        .background(
+                            // dream: legend swatches breathe a few hue degrees
+                            DreamFx.hueDrift(stageColor(s), dreamT, seed = 40 + s * 7),
+                            RoundedCornerShape(2.dp),
+                        ),
                 )
                 Text(
                     "  ${SleepStages.name(s)}",
@@ -182,6 +189,7 @@ fun NightStageBar(
     height: Int = 14,
 ) {
     if (stages.isEmpty()) return
+    val dreamT by rememberDreamTime()
     Canvas(
         modifier
             .fillMaxWidth()
@@ -192,8 +200,11 @@ fun NightStageBar(
         val h = size.height
         val slot = w / stages.size
         stages.forEachIndexed { i, stage ->
+            // dream: each sliver's hue breathes a few degrees around its
+            // true color — never enough to misread the stage.
+            val c = DreamFx.hueDrift(stageColor(stage), dreamT, seed = 40 + stage * 7 + i / 24)
             drawRect(
-                color = stageColor(stage),
+                color = c,
                 topLeft = Offset(i * slot, 0f),
                 size = Size(slot + 0.6f, h),
             )
@@ -223,6 +234,7 @@ fun HypnogramChart(
         return ((x / width) * stages.size).toInt().coerceIn(0, stages.size - 1)
     }
 
+    val dreamT by rememberDreamTime()
     Column(modifier) {
         Canvas(
             Modifier
@@ -255,7 +267,10 @@ fun HypnogramChart(
             val baseY = 4.dp.toPx() + 4 * bandH
             drawLine(GridLine, Offset(0f, baseY), Offset(w, baseY), strokeWidth = 1.5f)
 
-            // stage bands (y axis: Wake top … REM bottom), drawn as connected steps
+            // stage bands (y axis: Wake top … REM bottom), drawn as connected steps.
+            // dream: bands float a hair up/down and their hues breathe —
+            // harnessed to their lanes, just barely not still.
+            val dreamAmp = 1.1.dp.toPx()
             stages.forEachIndexed { i, stage ->
                 val y = when (stage) {
                     SleepStages.WAKE -> 0
@@ -263,9 +278,10 @@ fun HypnogramChart(
                     SleepStages.DEEP -> 2
                     else -> 3
                 }
+                val d = DreamFx.drift(dreamT, i, dreamAmp, seed = 23)
                 drawRect(
-                    color = stageColor(stage),
-                    topLeft = Offset(i * slot, 4.dp.toPx() + y * bandH + 2.5f),
+                    color = DreamFx.hueDrift(stageColor(stage), dreamT, seed = 40 + stage * 7 + i / 24),
+                    topLeft = Offset(i * slot + d.x * 0.4f, 4.dp.toPx() + y * bandH + 2.5f + d.y),
                     size = Size(slot + 0.6f, bandH - 5f),
                 )
             }
@@ -323,6 +339,9 @@ fun SimpleLineChart(
     fillCurve: Boolean = false,
     smooth: Boolean = false,
 ) {
+    val dreamT by rememberDreamTime()
+    // dream: the line's own color slowly breathes a few degrees of hue.
+    val dreamLineColor = DreamFx.hueDrift(lineColor, dreamT, seed = 11)
     Column(modifier) {
         val ys = points.map { it.second }
         val lo = if (ys.isEmpty()) 0f else minOf(ys.min(), (band?.start ?: ys.min().toDouble()).toFloat())
@@ -337,8 +356,16 @@ fun SimpleLineChart(
             val w = size.width
             val h = size.height
             if (points.isEmpty()) return@Canvas
+            val lineColor = dreamLineColor
 
             fun yOf(v: Float): Float = h - ((v - lo) / span) * (h - 10.dp.toPx()) - 5.dp.toPx()
+
+            // dream: every point of the curve is harnessed to where it
+            // should be, but drifts around its anchor on the dream clock —
+            // the whole line reads as very slowly flowing.
+            val dreamAmp = 2.2.dp.toPx()
+            fun dx(i: Int): Float = DreamFx.drift(dreamT, i, dreamAmp, seed = 5).x
+            fun dy(i: Int): Float = DreamFx.drift(dreamT, i, dreamAmp, seed = 5).y
 
             // horizontal gridlines (quiet)
             repeat(3) { g ->
@@ -377,22 +404,22 @@ fun SimpleLineChart(
 
             val path = Path()
             points.forEachIndexed { i, (fx, v) ->
-                val x = fx * w
-                if (i == 0) path.moveTo(x, yOf(v)) else path.lineTo(x, yOf(v))
+                val x = fx * w + dx(i)
+                if (i == 0) path.moveTo(x, yOf(v) + dy(i)) else path.lineTo(x, yOf(v) + dy(i))
             }
             if (smooth && points.size > 2) {
                 // quadratic midpoint smoothing for soft sleep2-like curves
                 val smoothPath = Path()
                 val x0 = points.first().first * w
-                smoothPath.moveTo(x0, yOf(points.first().second))
+                smoothPath.moveTo(x0 + dx(0), yOf(points.first().second) + dy(0))
                 for (i in 1 until points.size - 1) {
-                    val px = points[i].first * w
-                    val py = yOf(points[i].second)
-                    val nx = points[i + 1].first * w
-                    val ny = yOf(points[i + 1].second)
+                    val px = points[i].first * w + dx(i)
+                    val py = yOf(points[i].second) + dy(i)
+                    val nx = points[i + 1].first * w + dx(i + 1)
+                    val ny = yOf(points[i + 1].second) + dy(i + 1)
                     smoothPath.quadraticBezierTo(px, py, (px + nx) / 2f, (py + ny) / 2f)
                 }
-                smoothPath.lineTo(points.last().first * w, yOf(points.last().second))
+                smoothPath.lineTo(points.last().first * w + dx(points.size - 1), yOf(points.last().second) + dy(points.size - 1))
                 if (fillCurve) {
                     val fill = Path().apply {
                         addPath(smoothPath)
@@ -418,7 +445,9 @@ fun SimpleLineChart(
 
             markerIndices.forEach { i ->
                 if (i in points.indices) {
-                    drawCircle(lineColor, radius = 5f, center = Offset(points[i].first * w, yOf(points[i].second)))
+                    // dream: marker nodes drift around their anchor like
+                    // the rest of the line — tiny slow-motion wobble.
+                    drawCircle(lineColor, radius = 5f, center = Offset(points[i].first * w + dx(i), yOf(points[i].second) + dy(i)))
                 }
             }
         }
@@ -468,6 +497,7 @@ fun ScoreRing(
     ringColor: Color = MaterialTheme.colorScheme.tertiary,
     label: String = "recovery",
 ) {
+    val dreamT by rememberDreamTime()
     val track = MaterialTheme.colorScheme.surfaceContainerHighest
     Box(modifier, contentAlignment = Alignment.Center) {
         Canvas(Modifier.fillMaxSize()) {
@@ -484,9 +514,12 @@ fun ScoreRing(
                 style = Stroke(width = stroke, cap = StrokeCap.Round),
             )
             score?.let {
+                // dream: the score arc breathes ±1.5° around twelve o'clock
+                // and its hue drifts a few degrees — the ring almost holds
+                // still, but not quite.
                 drawArc(
-                    color = ringColor,
-                    startAngle = -90f,
+                    color = DreamFx.hueDrift(ringColor, dreamT, seed = 17),
+                    startAngle = -90f + DreamFx.breathe(dreamT, seed = 19) * 1.5f,
                     sweepAngle = 360f * (it / 100f).coerceIn(0f, 1f),
                     useCenter = false,
                     topLeft = Offset(inset, inset),

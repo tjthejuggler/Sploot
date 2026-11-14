@@ -35,6 +35,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.graphicsLayer
+import com.example.sploot.ui.dream.DreamFx
+import com.example.sploot.ui.dream.rememberDreamTime
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -283,6 +286,8 @@ fun HomeScreen(
     val nights by viewModel.nights.collectAsState()
     val hasTodayNight by viewModel.hasTodayNight.collectAsState()
     val captureStatus by viewModel.captureStatus.collectAsState()
+    // dream: shared slow clock for the page's quiet strangeness
+    val dreamT by rememberDreamTime()
 
     // Route into processing right after a stop (or orphan recovery)
     LaunchedEffect(stoppedSession) {
@@ -344,10 +349,22 @@ fun HomeScreen(
                 painter = painterResource(R.drawable.img_koala_ghost),
                 contentDescription = null,
                 contentScale = ContentScale.Fit,
+                // dream: the koala is never quite in the same place twice —
+                // it drifts a few px, breathes ~2% in scale and its opacity
+                // slowly swells and fades, like something remembered.
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(top = 8.dp, end = 8.dp)
-                    .size(110.dp),
+                    .size(110.dp)
+                    .graphicsLayer {
+                        val d = DreamFx.drift(dreamT, 3, 6.dp.toPx(), seed = 91)
+                        translationX = d.x
+                        translationY = d.y
+                        val b = DreamFx.breathe(dreamT, seed = 92)
+                        scaleX = 1f + b * 0.02f
+                        scaleY = 1f + b * 0.02f
+                        alpha = 0.72f + b * 0.22f
+                    },
             )
             Box(
                 Modifier
@@ -543,7 +560,24 @@ fun HomeScreen(
                 }
             }
 
-            item { Spacer(Modifier.height(48.dp)) }
+            // dream sign: a reality check that only rarely surfaces. The
+            // label spends most of its life invisible; every few minutes
+            // the dream clock breathes it into view for a handful of
+            // seconds — long enough to read, short enough to doubt.
+            item {
+                val b = DreamFx.breathe(dreamT, seed = 777)
+                val alpha = ((b - 0.965f) / 0.035f).coerceIn(0f, 1f) * 0.55f
+                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Spacer(Modifier.height(48.dp))
+                    if (alpha > 0.01f) {
+                        Text(
+                            if (DreamFx.which(dreamT, 777)) "are you sure you're awake?" else "pinch yourself. gently.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = alpha),
+                        )
+                    }
+                }
+            }
         }
     }
 }

@@ -40,6 +40,8 @@ import androidx.compose.ui.graphics.nativeCanvas
 import kotlin.math.abs
 import com.example.sploot.ui.components.NightCard
 import com.example.sploot.ui.components.SectionTitle
+import com.example.sploot.ui.dream.DreamFx
+import com.example.sploot.ui.dream.rememberDreamTime
 import com.example.sploot.ui.components.SimpleLineChart
 import com.example.sploot.ui.components.StatCard
 import com.example.sploot.ui.theme.HrCurve
@@ -281,6 +283,10 @@ private fun TrendChart(
 ) {
     val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
     val gridColor = lineColor.copy(alpha = 0.10f)
+    // dream: the trend line breathes hue and each night's node drifts a
+    // couple of dp around its anchor, like the rest of the app.
+    val dreamT by rememberDreamTime()
+    val dreamLine = DreamFx.hueDrift(lineColor, dreamT, seed = 13)
     Column {
         Canvas(Modifier.fillMaxWidth().height(168.dp)) {
             val gutter = 40.dp.toPx()
@@ -319,8 +325,12 @@ private fun TrendChart(
                 )
             }
 
-            // smoothed filled curve
-            val step = { i: Int -> Offset(x(i), y(points[i].second)) }
+            // smoothed filled curve — each node drifts on the dream clock
+            val dreamAmp = 2.dp.toPx()
+            val step = { i: Int ->
+                val d = DreamFx.drift(dreamT, i, dreamAmp, seed = 31)
+                Offset(x(i) + d.x, y(points[i].second) + d.y)
+            }
             val line = androidx.compose.ui.graphics.Path().apply {
                 moveTo(step(0).x, step(0).y)
                 for (i in 1 until points.size) {
@@ -329,6 +339,16 @@ private fun TrendChart(
                     quadraticBezierTo(
                         (prev.x + cur.x) / 2, prev.y,
                         (prev.x + cur.x) / 2, (prev.y + cur.y) / 2,
+                    )
+                }
+                // close the gap: the smoothing loop ends at the midpoint
+                // before the last node — curve the rest of the way into it.
+                if (points.size >= 2) {
+                    val prev = step(points.size - 2)
+                    val last = step(points.size - 1)
+                    quadraticBezierTo(
+                        (prev.x + last.x) / 2, last.y,
+                        last.x, last.y,
                     )
                 }
             }
@@ -341,11 +361,11 @@ private fun TrendChart(
             drawPath(
                 fill,
                 Brush.verticalGradient(
-                    0f to lineColor.copy(alpha = 0.28f),
-                    1f to lineColor.copy(alpha = 0.02f),
+                    0f to dreamLine.copy(alpha = 0.28f),
+                    1f to dreamLine.copy(alpha = 0.02f),
                 ),
             )
-            drawPath(line, lineColor, style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round))
+            drawPath(line, dreamLine, style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round))
 
             // per-night dots
             points.indices.forEach { i ->
